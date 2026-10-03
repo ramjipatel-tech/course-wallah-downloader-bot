@@ -1,15 +1,16 @@
 {
   "name": "Course Wallah Downloader",
-  "description": "Hardened, restart-safe, concurrent academic video & PDF downloader bot",
+  "description": "⚡ High-Performance, Multi-Platform Academic Video & PDF Downloader Telegram Bot with Single-Pass Watermarking & Multi-Bot Scalability",
   "keywords": [
     "telegram-bot",
     "video-downloader",
     "academic-parser",
     "pdf-watermark",
     "m3u8-downloader",
-    "pyrogram"
+    "pyrogram",
+    "multi-bot"
   ],
-  "repository": "https://github.com/ramjipatel-tech/course-wallah-downloader",
+  "repository": "https://github.com/ramjipatel-tech/course-wallah-downloader-bot",
   "stack": "container",
   "env": {
     "API_ID": {
@@ -23,9 +24,19 @@
       "required": true
     },
     "BOT_TOKEN": {
-      "description": "Telegram Bot Token from @BotFather",
+      "description": "Primary Telegram Bot Token from @BotFather (or use BOT_1_TOKEN)",
       "value": "",
-      "required": true
+      "required": false
+    },
+    "BOT_1_TOKEN": {
+      "description": "Bot 1 Token (for Multi-Bot architecture)",
+      "value": "",
+      "required": false
+    },
+    "BOT_2_TOKEN": {
+      "description": "Bot 2 Token (Optional: starts Bot 2 dynamically)",
+      "value": "",
+      "required": false
     },
     "OWNER_ID": {
       "description": "Telegram Owner User ID",

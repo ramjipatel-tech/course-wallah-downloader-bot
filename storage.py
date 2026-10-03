@@ -12,6 +12,7 @@
 
 import os
 import sys
+import time
 import shutil
 import uuid
 import logging
@@ -78,6 +79,14 @@ class StorageBackend(ABC):
         """Safely removes a directory if contained within managed storage."""
         pass
 
+    def is_writable(self) -> bool:
+        """Returns True if the managed storage root is writable."""
+        return True
+
+    def is_persistent_volume(self) -> bool:
+        """Returns True if storage resides on an attached persistent volume or dedicated drive."""
+        return False
+
 
 class LocalStorage(StorageBackend):
     """
@@ -103,7 +112,39 @@ class LocalStorage(StorageBackend):
         else:
             p = p.resolve()
 
-        self.root: Path = p
+        self.is_persistent: bool = False
+        self.writable: bool = False
+
+        # Verify writability of requested storage directory safely
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            test_file = p / f".cw_storage_probe_{os.getpid()}_{int(time.time() * 1000)}"
+            test_file.touch()
+            test_file.unlink()
+            self.root = p
+            self.writable = True
+            # Detect persistent volume: /data (Linux/Docker) or custom CW_STORAGE_DIR
+            if str(p).startswith("/data") or (env_cw and Path(env_cw).resolve() == p):
+                self.is_persistent = True
+        except Exception as exc:
+            logger.warning(f"[STORAGE] Configured path '{p}' is not accessible/writable ({exc}). Falling back to local data directory.")
+            fallback = (APP_ROOT / "data").resolve()
+            try:
+                fallback.mkdir(parents=True, exist_ok=True)
+                test_file = fallback / f".cw_storage_probe_{os.getpid()}"
+                test_file.touch()
+                test_file.unlink()
+                self.root = fallback
+                self.writable = True
+            except Exception:
+                import tempfile
+                sys_temp = (Path(tempfile.gettempdir()) / "coursewallah_data").resolve()
+                try:
+                    sys_temp.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                self.root = sys_temp
+                self.writable = False
 
         # Standard Directory Architecture
         self.dirs: Dict[str, Path] = {
@@ -125,11 +166,20 @@ class LocalStorage(StorageBackend):
         # Ensure all standard directories exist
         self.ensure_structure()
 
+    def is_writable(self) -> bool:
+        return getattr(self, "writable", True)
+
+    def is_persistent_volume(self) -> bool:
+        return getattr(self, "is_persistent", False)
+
     def ensure_structure(self) -> None:
         """Creates all standard storage subdirectories."""
-        self.root.mkdir(parents=True, exist_ok=True)
-        for d in self.dirs.values():
-            d.mkdir(parents=True, exist_ok=True)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            for d in self.dirs.values():
+                d.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.warning(f"[STORAGE] Directory creation warning: {exc}")
 
     def get_root_dir(self) -> Path:
         return self.root
@@ -140,7 +190,10 @@ class LocalStorage(StorageBackend):
             p = self.dirs[name_clean]
         else:
             p = self.root / name_clean
-        p.mkdir(parents=True, exist_ok=True)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         return p
 
     def get_job_temp_dir(self, bot_id: str, job_id: str, user_id: Optional[Union[str, int]] = None) -> Path:

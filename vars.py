@@ -10,16 +10,16 @@ load_dotenv()
 # ==============================================================================
 # 🔑 TELEGRAM & BOT CREDENTIALS
 # ==============================================================================
-API_ID_RAW = os.environ.get("API_ID", "").strip()
+API_ID_RAW = os.environ.get("API_ID", "").strip().strip("'\"")
 API_ID = int(API_ID_RAW) if API_ID_RAW.isdigit() else 0
 
-API_HASH = os.environ.get("API_HASH", "").strip()
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+API_HASH = os.environ.get("API_HASH", "").strip().strip("'\"")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip().strip("'\"")
 
-BOT_NAME = os.environ.get("BOT_NAME", "Course Wallah Downloader")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "course_wallah_official_bot")
-BOT_LINK = os.environ.get("BOT_LINK", "https://t.me/course_wallah_official_bot")
-SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/course_wallah_official_bot")
+BOT_NAME = os.environ.get("BOT_NAME", "Course Wallah Downloader").strip().strip("'\"")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "course_wallah_official_bot").strip().strip("'\"")
+BOT_LINK = os.environ.get("BOT_LINK", "https://t.me/course_wallah_official_bot").strip().strip("'\"")
+SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/course_wallah_official_bot").strip().strip("'\"")
 
 CREDIT = os.environ.get(
     "CREDIT",
@@ -47,12 +47,13 @@ def get_configured_bots() -> List[Dict[str, Any]]:
             indices.add(int(m.group(1)))
 
     for i in sorted(indices):
-        token = os.environ.get(f"BOT_{i}_TOKEN", "").strip()
+        token = os.environ.get(f"BOT_{i}_TOKEN", "").strip().strip("'\"")
         # Fallback for bot 1 to legacy BOT_TOKEN if BOT_1_TOKEN is not set
         if i == 1 and not token:
-            token = os.environ.get("BOT_TOKEN", "").strip()
+            token = os.environ.get("BOT_TOKEN", "").strip().strip("'\"")
 
-        if not token:
+        # Skip empty or placeholder tokens
+        if not token or token.lower() in ("your_telegram_bot_token_here", "none", "null", "") or " " in token:
             continue
 
         # Prevent duplicate tokens (do not start the same bot twice)
@@ -60,8 +61,8 @@ def get_configured_bots() -> List[Dict[str, Any]]:
             continue
         seen_tokens.add(token)
 
-        b_name = os.environ.get(f"BOT_{i}_NAME", f"coursewallah_{i}" if i > 1 else BOT_NAME).strip()
-        session = os.environ.get(f"BOT_{i}_SESSION", f"coursewallah_bot_{i}").strip()
+        b_name = os.environ.get(f"BOT_{i}_NAME", f"coursewallah_{i}" if i > 1 else BOT_NAME).strip().strip("'\"")
+        session = os.environ.get(f"BOT_{i}_SESSION", f"coursewallah_bot_{i}").strip().strip("'\"")
         if not session:
             session = f"coursewallah_bot_{i}"
 
@@ -73,7 +74,7 @@ def get_configured_bots() -> List[Dict[str, Any]]:
             dedup_idx += 1
         seen_sessions.add(session)
 
-        forum_chat = os.environ.get(f"BOT_{i}_FORUM_CHAT_ID", os.environ.get("FORUM_CHAT_ID", "")).strip()
+        forum_chat = os.environ.get(f"BOT_{i}_FORUM_CHAT_ID", os.environ.get("FORUM_CHAT_ID", "")).strip().strip("'\"")
 
         configured.append({
             "id": f"bot_{i}",
@@ -91,10 +92,10 @@ BOTS: List[Dict[str, Any]] = get_configured_bots()
 # ==============================================================================
 # 👥 OWNER & ADMINS
 # ==============================================================================
-OWNER_ID_RAW = os.environ.get("OWNER_ID", "").strip()
+OWNER_ID_RAW = os.environ.get("OWNER_ID", "").strip().strip("'\"")
 OWNER_ID = int(OWNER_ID_RAW) if OWNER_ID_RAW.isdigit() else 0
 
-ADMINS_RAW = os.environ.get("ADMINS", str(OWNER_ID) if OWNER_ID else "")
+ADMINS_RAW = os.environ.get("ADMINS", str(OWNER_ID) if OWNER_ID else "").strip().strip("'\"")
 ADMINS = [int(x.strip()) for x in ADMINS_RAW.split(",") if x.strip().isdigit()]
 if OWNER_ID and OWNER_ID not in ADMINS:
     ADMINS.append(OWNER_ID)
@@ -140,9 +141,12 @@ JOBS_STATE_FILE = os.path.join(STATE_DIR, "jobs.json")
 CONFIG_STATE_FILE = os.path.join(STATE_DIR, "config.json")
 TOPICS_STATE_FILE = os.path.join(STATE_DIR, "topics.json")
 
-# Ensure all essential directories exist
+# Ensure all essential directories exist safely
 for d in [DATA_DIR, USERS_DIR, JOBS_DIR, STATE_DIR, COOKIES_DIR, LOGS_DIR, TEMP_DIR, DOWNLOADS_DIR, OUTPUT_DIR, SESSIONS_DIR, THUMBNAILS_DIR, CACHE_DIR, CONFIG_DIR, TOPICS_DIR, ASSETS_DIR, START_IMAGE_DIR]:
-    os.makedirs(d, exist_ok=True)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
 
 # Legacy / Global compatibility
 DATABASE_ENABLED = False  # Local JSON persistence is always active

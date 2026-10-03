@@ -24,6 +24,10 @@ services:
         sync: false
       - key: BOT_TOKEN
         sync: false
+      - key: BOT_1_TOKEN
+        sync: false
+      - key: BOT_2_TOKEN
+        sync: false
       - key: OWNER_ID
         sync: false
       - key: ADMINS

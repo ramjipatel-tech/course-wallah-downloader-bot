@@ -91,6 +91,8 @@ from vars import (
     START_IMAGE_DIR,
     SESSION_NAME,
     SESSION_DIR,
+    SESSIONS_DIR,
+    storage,
     FORUM_CHAT_ID,
     RECORDED_TOPIC_ID,
     LIVE_TOPIC_ID,
@@ -153,7 +155,9 @@ from academic_parser import (
     normalize_title,
     AcademicCourse,
     AcademicUnit,
-    AcademicItem,
+    AcademicItem
+)
+from bracket_topic_parser import (
     parse_bracket_topic_txt,
     parse_bracket_topic_raw,
     parse_first_topic,
@@ -175,25 +179,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("CourseWallahBot")
-
-# Optional Flask web server for health checks
-if WEB_SERVER:
-    from flask import Flask
-    import threading
-
-    app_flask = Flask(__name__)
-
-    @app_flask.route('/')
-    def home():
-        return "Bot is running healthy!"
-
-    def run_web():
-        try:
-            app_flask.run(host="0.0.0.0", port=PORT)
-        except Exception as e:
-            logger.error(f"Flask server error: {e}")
-
-    threading.Thread(target=run_web, daemon=True).start()
 
 # ==============================================================================
 # 🤖 BOT CONTEXT & MULTI-BOT INSTANCE MANAGEMENT
@@ -4163,17 +4148,29 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, CallbackQueryHandler(back_to_start_callback, filters.regex("back_to_start")))
 
 
+_CLIENTS_BY_ID: Dict[str, Client] = {}
+
 def create_bot_client(config: Dict[str, Any]) -> Client:
     """Create and configure an independent Pyrogram Client instance."""
+    bot_id = config.get("id") or f"bot_{config.get('index', 1)}"
+    if bot_id in _CLIENTS_BY_ID:
+        return _CLIENTS_BY_ID[bot_id]
+
     session_name = config.get("session_name") or f"coursewallah_bot_{config.get('index', 1)}"
     token = config.get("token") or BOT_TOKEN
-    bot_id = config.get("id") or f"bot_{config.get('index', 1)}"
+
+    # Ensure sessions directory exists safely
+    try:
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
+    except Exception:
+        pass
+
     client = Client(
         name=session_name,
         api_id=API_ID,
         api_hash=API_HASH,
         bot_token=token,
-        workdir=os.getcwd()
+        workdir=SESSIONS_DIR
     )
     ctx = BotContext(
         bot_id=bot_id,
@@ -4184,6 +4181,7 @@ def create_bot_client(config: Dict[str, Any]) -> Client:
     )
     register_bot_context(client, ctx)
     register_all_handlers(client)
+    _CLIENTS_BY_ID[bot_id] = client
     return client
 
 
@@ -4270,7 +4268,7 @@ async def start_single_bot(bot_ctx: BotContext) -> bool:
     client = bot_ctx.client
     bot_name = bot_ctx.bot_name
     print(f"\n[{bot_name}] Connecting...")
-    logger.info(f"[{bot_name}] Connecting session: {bot_ctx.session_name}")
+    logger.info(f"[{bot_name}] Connecting session: {bot_ctx.session_name} (workdir: {getattr(client, 'workdir', SESSIONS_DIR)})")
 
     try:
         await client.start()
@@ -4294,16 +4292,20 @@ async def start_single_bot(bot_ctx: BotContext) -> bool:
 
         await setup_bot_commands(client)
         return True
-    except (sqlite3.OperationalError, Exception) as e:
+    except sqlite3.OperationalError as e:
         err_msg = str(e)
-        if "database is locked" in err_msg.lower() or "locked" in err_msg.lower():
-            print(f"[{bot_name}] Session database is locked.")
-            logger.error(f"[{bot_name}] Session database is locked: {bot_ctx.session_name}")
-            bot_ctx.error = "Session database is locked"
-        else:
-            print(f"[{bot_name}] Connection failed: {err_msg}")
-            logger.error(f"[{bot_name}] Connection failed: {err_msg}")
-            bot_ctx.error = err_msg
+        print(f"[{bot_name}] SQLite session error ({bot_ctx.session_name}): {err_msg}", file=sys.stderr)
+        logger.error(f"[{bot_name}] SQLite session error: {bot_ctx.session_name} -> {err_msg}", exc_info=True)
+        bot_ctx.error = f"Session database error: {err_msg}"
+        bot_ctx.is_online = False
+        return False
+    except Exception as e:
+        import traceback
+        err_msg = str(e)
+        print(f"[{bot_name}] Connection failed: {err_msg}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        logger.error(f"[{bot_name}] Connection failed: {err_msg}", exc_info=True)
+        bot_ctx.error = err_msg
         bot_ctx.is_online = False
         return False
 
@@ -4311,7 +4313,7 @@ async def start_single_bot(bot_ctx: BotContext) -> bool:
 def start_health_server(port: Optional[int] = None):
     """Optional background HTTP health check server for Render/Railway/Heroku web deployments."""
     if port is None:
-        port_env = os.environ.get("PORT")
+        port_env = os.environ.get("PORT", "").strip().strip("'\"")
         if port_env and port_env.isdigit():
             port = int(port_env)
         elif WEB_SERVER:
@@ -4324,10 +4326,14 @@ def start_health_server(port: Optional[int] = None):
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status":"ok","service":"Course Wallah Telegram Downloader Bot"}\n')
+            if self.path in ("/", "/health", "/status", "/ping"):
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok","service":"Course Wallah Telegram Downloader Bot"}\n')
+            else:
+                self.send_response(404)
+                self.end_headers()
 
         def log_message(self, format, *args):
             pass
@@ -4350,25 +4356,49 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
     # Start optional background HTTP health server if PORT or WEB_SERVER is configured
     start_health_server()
 
-    print("Course Wallah Multi-Bot")
-    print("-----------------------")
-    print(f"Configured bots: {len(configs)}")
+    py_ver = sys.version.split()[0]
+    cpu_cnt = os.cpu_count() or 1
 
-    # 1. Environment & Storage Diagnostics
-    storage_info = get_disk_storage_info()
-    print(f"Project Storage: {storage_info.get('drive') or storage_info.get('path', 'Local')}")
-    print(f"Free Space: {storage_info.get('free_human', 'Unknown')}")
+    # FFmpeg & FFprobe Verification
+    ffmpeg_ok = False
+    try:
+        r_ff = subprocess.run([FFMPEG_PATH or "ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ffmpeg_ok = (r_ff.returncode == 0)
+    except Exception:
+        ffmpeg_ok = False
+
+    ffprobe_ok = False
+    try:
+        r_fp = subprocess.run(["ffprobe", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ffprobe_ok = (r_fp.returncode == 0)
+    except Exception:
+        ffprobe_ok = False
+
+    storage_root = str(storage.get_root_dir())
+    storage_writable = storage.is_writable()
+    is_persistent = storage.is_persistent_volume()
+
+    print("==================================================")
+    print("Course Wallah Downloader")
+    print("==================================================")
+    print(f"Python: {py_ver}")
+    print(f"FFmpeg: {'OK' if ffmpeg_ok else 'NOT FOUND'}")
+    print(f"FFprobe: {'OK' if ffprobe_ok else 'NOT FOUND'}")
+    print(f"Storage: {storage_root}")
+    print(f"Storage writable: {'YES' if storage_writable else 'NO'}")
+    print(f"Persistent volume: {'detected' if is_persistent else 'not detected'}")
+    print(f"Bots configured: {len(configs)}")
+
+    storage_info = get_disk_storage_info(storage_root)
+    print(f"Disk Free Space: {storage_info.get('free_human', 'Unknown')}")
     print(f"Temp Directory: {TEMP_DIR}")
+    print(f"Sessions Directory: {SESSIONS_DIR}")
 
     # Safe stale temp cleanup on startup (preserving active checkpoints)
     stale_cleaned = cleanup_stale_temp_dirs()
     if stale_cleaned > 0:
         logger.info(f"Cleaned {stale_cleaned} stale temporary directories on startup.")
 
-    py_ver = sys.version.split()[0]
-    cpu_cnt = os.cpu_count() or 1
-    print(f"Python: {py_ver}")
-    print(f"CPU Cores: {cpu_cnt}")
     import pyrogram
     print(f"Pyrogram: {getattr(pyrogram, '__version__', 'unknown')}")
 
@@ -4379,40 +4409,21 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
         yt_ver = r_yt.stdout.strip() if r_yt.returncode == 0 else "unknown"
     except Exception:
         yt_ver = "unknown"
-    print(f"yt-dlp: {yt_ver} (exec: {' '.join(ytdlp_cmd)})")
+    print(f"yt-dlp: {yt_ver}")
 
-    # 2. Credential Validation
+    # Credential Validation
     if not configs:
         msg = (
-            "❌ Fatal Configuration Error: No bot tokens configured!\n"
-            "Please configure BOT_TOKEN or BOT_1_TOKEN, BOT_2_TOKEN in .env\n"
-            "Then restart the application."
+            "❌ Fatal Configuration Error: No valid Telegram bot tokens configured!\n"
+            "Please configure BOT_TOKEN or BOT_1_TOKEN in environment variables / Railway Variables.\n"
         )
-        print(msg)
+        print(msg, file=sys.stderr)
         logger.error(msg)
+        if os.environ.get("PORT"):
+            print("[INFO] Keeping container alive for HTTP health checks. Please set bot tokens in Railway dashboard.")
+            while True:
+                await asyncio.sleep(3600)
         return
-
-    # 3. FFmpeg & FFprobe Verification and HW Acceleration
-    ffmpeg_ok = False
-    try:
-        r_ff = subprocess.run([FFMPEG_PATH or "ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        ffmpeg_ok = (r_ff.returncode == 0)
-    except Exception:
-        ffmpeg_ok = False
-    print(f"FFmpeg: {'OK' if ffmpeg_ok else 'NOT FOUND'}")
-    if not ffmpeg_ok:
-        logger.warning("FFmpeg was not detected on system PATH. Video transcoding/watermarking may be limited.")
-
-    hw_encoder = helper.detect_ffmpeg_hardware_encoders()
-    print(f"Video Encoder: {hw_encoder.upper() + ' (Hardware Acceleration)' if hw_encoder else 'libx264 (Optimized CPU Single-Pass)'}")
-
-    ffprobe_ok = False
-    try:
-        r_fp = subprocess.run(["ffprobe", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        ffprobe_ok = (r_fp.returncode == 0)
-    except Exception:
-        ffprobe_ok = False
-    print(f"FFprobe: {'OK' if ffprobe_ok else 'NOT FOUND'}")
 
     # 4. Resource Tier Detection & Worker Limits
     if cpu_cnt <= 1:
@@ -4427,10 +4438,7 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
 
     print(f"Platform Tier: {res_tier}")
     print(f"Workers: Configured (Download={DOWNLOAD_WORKERS}, Upload={UPLOAD_WORKERS}) | Recommended (Download={rec_down}, Upload={rec_up})")
-    print("Persistence: Database-Free Atomic JSON State (OK)")
     print(f"Watermark: READY (Text: {WATERMARK_TEXT})")
-
-    print(f"\nConfigured Bots: {len(configs)}")
 
     # 5. Initialize bot clients
     bot_contexts: List[BotContext] = []
@@ -4442,12 +4450,10 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
 
     # 6. Start all bot clients
     for ctx in bot_contexts:
+        print(f"Starting {ctx.bot_name}...")
         await start_single_bot(ctx)
 
     online_contexts = [ctx for ctx in bot_contexts if ctx.is_online]
-
-    if online_contexts:
-        print("\nAll configured bots started.")
 
     print("\n" + "=" * 60)
     print("BOT STATUS")
@@ -4461,8 +4467,12 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
             print(f"🔴 {ctx.bot_name} — FAILED{reason}")
 
     if not online_contexts:
-        print("\n❌ No bot instances could be started.")
+        print("\n❌ No bot instances could be started.", file=sys.stderr)
         logger.error("No bot instances online.")
+        if os.environ.get("PORT"):
+            print("[INFO] Keeping container alive for HTTP health checks. Check credentials and Railway logs.")
+            while True:
+                await asyncio.sleep(3600)
         return
 
     # 7. Proactive Forum Group Validation on first online client
@@ -4526,9 +4536,9 @@ def start_bot():
     except (KeyboardInterrupt, SystemExit):
         print("\nBot process exited cleanly.")
     except Exception as e:
-        print(f"[Fatal Startup Error] {e}")
+        print(f"[Fatal Startup Error] {e}", file=sys.stderr)
         import traceback
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stderr)
 
 
 if __name__ == "__main__":

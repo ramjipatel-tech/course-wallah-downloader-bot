@@ -15,6 +15,8 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.venv_test/
 env/
 venv/
+.kilo/
 .pytest_cache/
