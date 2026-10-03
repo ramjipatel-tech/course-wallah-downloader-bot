@@ -17,7 +17,7 @@ from math import ceil
 from io import BytesIO
 from pathlib import Path
 from base64 import b64decode
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
 
 try:
