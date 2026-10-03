@@ -1,0 +1,48 @@
+# ==============================================================================
+# Course Wallah Downloader - Render Blueprint
+# ==============================================================================
+# Note: Render Background Workers require a paid tier (Starter+) for continuous
+# 24x7 operation. Telegram bots should not be run on free web services because
+# free web services spin down after 15 minutes of inactivity.
+# ==============================================================================
+services:
+  - type: worker
+    name: course-wallah-downloader
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    autoDeploy: true
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: ADMINS
+        sync: false
+      - key: BOT_NAME
+        value: Course Wallah Downloader
+      - key: BOT_USERNAME
+        sync: false
+      - key: WATERMARK_TEXT
+        value: Course Wallah
+      - key: WATERMARK_CRF
+        value: "26"
+      - key: DOWNLOAD_WORKERS
+        value: "4"
+      - key: UPLOAD_WORKERS
+        value: "3"
+      - key: MAX_ACTIVE_USERS
+        value: "6"
+      - key: CW_STORAGE_DIR
+        value: /data
+      - key: DATA_DIR
+        value: /data

@@ -1,0 +1,92 @@
+# ==============================================================================
+# Environment & Secrets (NEVER COMMIT)
+# ==============================================================================
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*.cert
+
+# Telegram & Session Files
+*.session
+*.session-journal
+data/state/*.session
+data/state/*.session-journal
+data/sessions/
+
+# Cookies
+cookies/
+data/cookies/
+*.cookie
+*.cookies
+cookies.txt
+youtube_cookies.txt
+
+# Local State & Persistence
+data/state/
+data/jobs/
+data/users/
+data/topics/
+data/config/
+data/temp/
+data/logs/
+*.corrupt_*
+
+# Media & Temporary Downloads
+downloads/
+download/
+tmp/
+temp/
+media/
+pdf_test_downloads/
+*.mp4
+*.mkv
+*.webm
+*.pdf
+*.zip
+*.ts
+*.m3u8
+*.part
+*.ytdl
+*.aria2
+*.tmp*
+*.tmp
+test_*.png
+test_*.mp4
+
+# Logs
+logs/
+*.log
+logs.txt
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.venv*/
+ENV/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.kilo/
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+node_modules/

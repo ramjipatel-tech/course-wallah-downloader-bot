@@ -1,0 +1,38 @@
+[Unit]
+Description=Course Wallah Downloader Telegram Bot (24x7 Production Service)
+Documentation=https://github.com/Ramji7070/working-
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/course-wallah-downloader
+EnvironmentFile=/opt/course-wallah-downloader/.env
+
+# Create runtime directories before startup
+ExecStartPre=/bin/mkdir -p /opt/course-wallah-downloader/data/state /opt/course-wallah-downloader/data/logs /opt/course-wallah-downloader/data/temp /opt/course-wallah-downloader/data/cookies /opt/course-wallah-downloader/data/jobs /opt/course-wallah-downloader/data/users /opt/course-wallah-downloader/data/topics /opt/course-wallah-downloader/data/config /opt/course-wallah-downloader/downloads
+
+# Real entrypoint running inside the virtual environment
+ExecStart=/opt/course-wallah-downloader/.venv/bin/python3 main.py
+
+# 24x7 Automatic Restart Policy
+Restart=always
+RestartSec=5s
+
+# Graceful termination
+KillSignal=SIGTERM
+TimeoutStopSec=30
+SendSIGKILL=yes
+
+# Logging to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=course-wallah
+
+# Limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

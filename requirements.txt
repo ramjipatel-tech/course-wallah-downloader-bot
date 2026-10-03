@@ -1,0 +1,36 @@
+# Telegram Framework
+pyrofork>=2.2.11
+tgcrypto>=1.2.5
+pysocks>=1.7.1
+
+# Async & Network I/O
+requests>=2.31.0
+aiohttp>=3.9.0
+aiofiles>=23.2.0
+cloudscraper>=1.2.71
+beautifulsoup4>=4.12.0
+urllib3>=2.0.0
+certifi>=2023.7.22
+
+# Media & Video Processing
+yt-dlp>=2024.0.0
+m3u8>=4.1.0
+mutagen>=1.47.0
+ffmpeg-python>=0.2.0
+pillow>=10.0.0
+pymupdf>=1.23.0
+
+# Cryptography & Security
+pycryptodome>=3.18.0
+cryptography>=41.0.0
+pyaes>=1.6.1
+
+# Configuration & Utilities
+python-dotenv>=1.0.0
+pytz>=2023.3
+tqdm>=4.66.0
+colorama>=0.4.6
+
+# Web Server (Optional Health Checks)
+flask>=3.0.0
+gunicorn>=21.2.0

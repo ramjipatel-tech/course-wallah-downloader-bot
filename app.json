@@ -1,0 +1,62 @@
+{
+  "name": "Course Wallah Downloader",
+  "description": "Hardened, restart-safe, concurrent academic video & PDF downloader bot",
+  "keywords": [
+    "telegram-bot",
+    "video-downloader",
+    "academic-parser",
+    "pdf-watermark",
+    "m3u8-downloader",
+    "pyrogram"
+  ],
+  "repository": "https://github.com/ramjipatel-tech/course-wallah-downloader",
+  "stack": "container",
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org",
+      "value": "",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API Hash from https://my.telegram.org",
+      "value": "",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "Telegram Bot Token from @BotFather",
+      "value": "",
+      "required": true
+    },
+    "OWNER_ID": {
+      "description": "Telegram Owner User ID",
+      "value": "",
+      "required": true
+    },
+    "ADMINS": {
+      "description": "Comma-separated list of admin Telegram IDs",
+      "value": "",
+      "required": false
+    },
+    "DOWNLOAD_WORKERS": {
+      "description": "Max concurrent download tasks (1-4)",
+      "value": "4",
+      "required": false
+    },
+    "UPLOAD_WORKERS": {
+      "description": "Max concurrent upload tasks (1-3)",
+      "value": "3",
+      "required": false
+    },
+    "WATERMARK_TEXT": {
+      "description": "Watermark text for videos and PDFs",
+      "value": "Course Wallah",
+      "required": false
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  }
+}
