@@ -723,16 +723,20 @@ def extract_remote_media_segment(
     start_sec: float,
     dur_sec: float,
     output_path: str,
-    timeout: int = 120
+    timeout: Optional[int] = None
 ) -> bool:
     """
     Extracts a time-aligned segment from remote video and audio streams using FFmpeg stream copy.
     - Slices matching exact time ranges (-ss start_sec -t dur_sec) for both video and audio.
     - Explicitly supplies container format (-f matroska or -f mp4) to ensure FFmpeg never fails on temporary file paths.
     - Preserves container validity and faststart if mp4.
+    - Uses dynamic timeout scaled to part duration to support large ~1800 MB 4K parts.
     """
     if not video_url or not output_path:
         return False
+
+    if timeout is None or timeout <= 0:
+        timeout = max(600, int(dur_sec * 3.0))
 
     ext = os.path.splitext(output_path)[1].lower()
     is_mkv = ext in [".mkv", ".webm"]
