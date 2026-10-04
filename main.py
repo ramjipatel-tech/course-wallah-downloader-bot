@@ -134,9 +134,24 @@ from utils import (
     format_pdf_processing_card,
     format_pdf_upload_card,
     format_success_card,
+    format_main_menu,
+    format_invalid_input_card,
     format_youtube_quality_menu,
     format_youtube_fallback_card,
+    format_4k_available_card,
+    format_4k_unavailable_card,
+    format_single_quality_card,
     format_universal_input_card,
+    format_batch_input_card,
+    format_batch_summary_card,
+    format_chat_id_card,
+    format_api_token_card,
+    format_watermark_input_card,
+    format_help_menu_card,
+    format_contact_card,
+    format_status_card,
+    format_failure_card,
+    format_expired_callback_card,
     format_drm_input_card,
     format_drm_result_card,
     format_bot_online_card,
@@ -432,31 +447,13 @@ def build_welcome_dashboard(user_id: int, first_name: str, is_admin: bool = Fals
         else:
             expiry_display = "Active Premium Member"
 
-    text = (
-        f"🎓 <b>WELCOME TO {bname.upper()}</b>\n\n"
-        f"Hello, <b>{first_name}</b> 👋\n\n"
-        "Your learning dashboard is ready.\n\n"
-        f"👑 <b>{bname.upper()}</b>\n"
-        "Premium Member\n"
-        "🟢 <b>ACTIVE</b>\n\n"
-        "<b>Valid Till:</b>\n"
-        f"<code>{expiry_display}</code>\n\n"
-        "<b>Available Benefits:</b>\n"
-        "✅ Video Downloads\n"
-        "✅ PDF / Notes\n"
-        "✅ Course Resources\n"
-        "✅ YouTube Downloads\n"
-        "✅ Fast Processing"
+    return format_main_menu(
+        user_id=user_id,
+        first_name=first_name,
+        is_admin=is_admin,
+        bot_name=bname,
+        expiry_display=expiry_display
     )
-
-    buttons = [
-        [InlineKeyboardButton("📚 COURSES", callback_data="menu_courses"), InlineKeyboardButton("⬇️ DOWNLOAD", callback_data="menu_download")],
-        [InlineKeyboardButton("👑 MY SUBSCRIPTION", callback_data="menu_subscription"), InlineKeyboardButton("ℹ️ HELP", callback_data="menu_help")]
-    ]
-    if is_admin:
-        buttons.append([InlineKeyboardButton("👑 ADMIN PANEL", callback_data="adm_main")])
-
-    return text, InlineKeyboardMarkup(buttons)
 
 
 def build_unauthorized_panel(support_link: str = None) -> tuple[str, InlineKeyboardMarkup]:
@@ -576,25 +573,8 @@ async def start_cmd(client: Client, message: Message):
 
 async def help_cmd(client: Client, message: Message):
     b_name = get_bot_display_name(client)
-    help_text = (
-        f"<b>📖 {b_name} — User Guide</b>\n\n"
-        "<b>1. How to download a Course / Batch:</b>\n"
-        "• Send <code>/drm</code> and upload your <code>.txt</code> file containing course links.\n"
-        "• The bot will parse Subject, Units, Topics, and Items automatically.\n"
-        "• Select start index, resolution, watermark, thumbnail, and destination channel.\n\n"
-        "<b>2. Controlling Downloads:</b>\n"
-        "• <code>/status</code>: Real-time progress, speed, and ETA.\n"
-        "• <code>/stop</code>: Pauses download and saves checkpoint.\n"
-        "• <code>/resume</code>: Resumes from last completed item.\n"
-        "• <code>/cancel</code>: Cancels and cleans temporary files.\n\n"
-        "<b>3. YouTube Cookies:</b>\n"
-        "• Use <code>/cookies</code> to upload your <code>cookies.txt</code> for private/restricted videos.\n"
-        "• Check status with <code>/getcookies</code> or remove with <code>/deletecookies</code>.\n\n"
-        "<b>4. Converter Tools:</b>\n"
-        "• <code>/t2t</code>: Text to .txt file converter.\n"
-        "• <code>/t2h</code>: HTML converter."
-    )
-    await message.reply_text(help_text)
+    text, markup = format_help_menu_card(b_name)
+    await message.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def id_cmd(client: Client, message: Message):
@@ -606,32 +586,29 @@ async def id_cmd(client: Client, message: Message):
     raw_type = getattr(chat.type, "value", str(chat.type)) if hasattr(chat.type, "value") else str(chat.type)
     chat_type = raw_type.lower().replace("chattype.", "")
 
-    lines = [
-        f"<b>🆔 Chat ID:</b> <code>{chat_id}</code>",
-        f"<b>📌 Type:</b> <code>{chat_type}</code>"
-    ]
-
-    if chat.title:
-        lines.append(f"<b>📚 Title:</b> {chat.title}")
-    elif chat.first_name:
-        name_parts = [chat.first_name]
-        if chat.last_name:
-            name_parts.append(chat.last_name)
-        lines.append(f"<b>👤 Name:</b> {' '.join(name_parts)}")
-
-    if chat.username:
-        lines.append(f"<b>🔗 Username:</b> @{chat.username}")
-
-    if message.from_user and chat_type != "private":
-        lines.append(f"<b>👤 User ID:</b> <code>{message.from_user.id}</code>")
-
     thread_id = getattr(message, "message_thread_id", None)
-    if thread_id and chat_type in ["supergroup", "group"]:
-        lines.append(f"<b>🧵 Topic / Thread ID:</b> <code>{thread_id}</code>")
+    if thread_id and chat_type not in ["supergroup", "group"]:
+        thread_id = None
 
-    reply_text = "\n".join(lines)
+    title = chat.title or (f"{chat.first_name or ''} {chat.last_name or ''}".strip() if chat.first_name else None)
+    user_id = message.from_user.id if message.from_user and chat_type != "private" else None
+
+    res = format_chat_id_card(
+        chat_id=chat_id,
+        chat_type=chat_type,
+        title=title,
+        username=chat.username,
+        thread_id=int(thread_id) if thread_id else None,
+        user_id=user_id
+    )
 
     reply_kwargs = {}
+    if isinstance(res, tuple):
+        card_text, card_markup = res
+        reply_kwargs["reply_markup"] = card_markup
+    else:
+        card_text = res
+
     if thread_id and chat_type in ["supergroup", "group"]:
         try:
             reply_kwargs["message_thread_id"] = int(thread_id)
@@ -639,7 +616,7 @@ async def id_cmd(client: Client, message: Message):
             pass
 
     try:
-        await message.reply_text(reply_text, parse_mode=enums.ParseMode.HTML, **reply_kwargs)
+        await message.reply_text(card_text, parse_mode=enums.ParseMode.HTML, **reply_kwargs)
     except Exception as exc:
         logger.warning(f"Failed to reply to /id command: {exc}")
 
@@ -3253,47 +3230,191 @@ async def menu_callbacks(client: Client, query: CallbackQuery):
     data = query.data
     await query.answer()
 
+    b_name = get_bot_display_name(client)
+    s_link = get_bot_support_link(client)
+    s_uname = getattr(vars, "SUPPORT_USERNAME", "") or get_bot_username(client)
+
     if data == "menu_main":
         user_name = query.from_user.first_name if query.from_user else "User"
         is_admin = db.is_admin(user_id)
-        text, markup = build_welcome_dashboard(user_id, user_name, is_admin)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-
-    elif data == "menu_courses":
-        text = (
-            "📚 <b>COURSE WALLAH — COURSES & LECTURES</b>\n\n"
-            "Your centralized high-speed learning downloader.\n\n"
-            "<b>Supported Features:</b>\n"
-            "• 🎥 <b>Lecture Videos:</b> Fast multi-quality M3U8 & direct streams\n"
-            "• 📄 <b>PDF Study Materials:</b> Automatic extraction with clean branding\n"
-            "• 📺 <b>YouTube Lectures:</b> Single videos, playlists & authenticated streams\n"
-            "• 📁 <b>Batch TXT Files:</b> Multi-unit academic hierarchy parsing\n"
-            "• 💬 <b>Forum Topics:</b> Direct supergroup topic routing\n\n"
-            "💡 <i>Tip: Send any lecture link or .txt file directly to download!</i>"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬇️ Start Download", callback_data="menu_download")],
-            [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="menu_main")]
-        ])
+        text, markup = build_welcome_dashboard(user_id, user_name, is_admin, bot_name=b_name)
         await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
     elif data == "menu_download":
         text = (
-            "⬇️ <b>COURSE WALLAH — HOW TO DOWNLOAD</b>\n\n"
-            "<b>1. Direct Link:</b>\n"
-            "Simply paste any Lecture or YouTube URL directly into this chat.\n\n"
-            "<b>2. Batch TXT File:</b>\n"
-            "Drop your <code>.txt</code> file here or send <code>/drm</code> to start batch extraction.\n\n"
-            "<b>3. Control Commands:</b>\n"
-            "• <code>/status</code> — Check active download progress\n"
-            "• <code>/stop</code> — Pause running download\n"
-            "• <code>/resume</code> — Resume paused download\n"
-            "• <code>/cancel</code> — Cancel download\n"
-            "• <code>/cookies</code> — Configure YouTube cookies"
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 🎓 <b>COURSE WALLAH</b>      │\n"
+            "│   🎬 <b>DOWNLOAD</b>         │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔗 <b>Send your media URL</b>\n\n"
+            "You can send:\n"
+            "• YouTube URL (up to 4K UHD)\n"
+            "• Course / Lecture URL\n"
+            "• Direct M3U8 or MP4 Stream\n"
+            "• PDF Study Material link\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💡 <b>Example:</b>\n"
+            "<code>https://youtu.be/...</code>"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="menu_main")]
+            [InlineKeyboardButton("📦 BATCH DOWNLOAD", callback_data="menu_batch")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
         ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_courses":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 📚 <b>MY COURSES</b>        │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Centralized learning downloader.\n\n"
+            "<b>Supported Features:</b>\n"
+            "• 🎥 <b>Lecture Videos:</b> Multi-quality M3U8, KGS & Spayee\n"
+            "• 📺 <b>YouTube 4K:</b> Fast remote slicing up to 2160p\n"
+            "• 📄 <b>PDF Notes:</b> Automatic extraction with branding\n"
+            "• 📁 <b>Batch Hierarchy:</b> Subject → Unit → Topic structure\n"
+            "• 💬 <b>Forum Topics:</b> Direct supergroup routing\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💡 <i>Tip: Send any lecture link or .txt file directly!</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 START DOWNLOAD", callback_data="menu_download")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_quality":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 🎯 <b>QUALITY SELECTOR</b>  │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Course Wallah provides smart stream quality selection:\n\n"
+            "• 🔥 <b>4K UHD • 2160p</b> (VP9 + AAC Remote Part Slicing)\n"
+            "• 💎 <b>1440p Quad HD</b> (2K High Resolution)\n"
+            "• 🎬 <b>1080p Full HD</b> (Crystal Clear Playback)\n"
+            "• ⚡ <b>720p HD</b> (Fast Standard Streaming)\n"
+            "• 📱 <b>480p / 360p SD</b> (Data-Saver Streams)\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🎯 <i>Only REAL available qualities are presented per stream.</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 START DOWNLOAD", callback_data="menu_download")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_batch":
+        text, markup = format_batch_input_card(user_id=user_id)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_pdf":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 📄 <b>PDF DOWNLOADER</b>    │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "High-speed PDF notes & study material extraction.\n\n"
+            "<b>Capabilities:</b>\n"
+            "• Direct PDF downloads\n"
+            "• Password-protected PDF unlocking (`URL*password`)\n"
+            "• Clean watermarking & metadata tagging\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💡 <b>Usage:</b> Simply paste a PDF link or batch file."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 START DOWNLOAD", callback_data="menu_download")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_drm":
+        text, markup = format_drm_input_card(user_id=user_id)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_help":
+        text, markup = format_help_menu_card(b_name)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_help_how":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 📖 <b>HOW TO USE</b>        │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "<b>1. Downloading Individual Videos:</b>\n"
+            "• Paste any YouTube, Lecture, or M3U8 link in this chat.\n"
+            "• Choose your desired quality from the popup menu.\n\n"
+            "<b>2. Downloading Batch Courses:</b>\n"
+            "• Send <code>/drm</code> and upload your course <code>.txt</code> file.\n"
+            "• Choose start index and custom parameters.\n\n"
+            "<b>3. Controlling Downloads:</b>\n"
+            "• <code>/status</code>: Real-time progress, speed, and ETA\n"
+            "• <code>/stop</code>: Pause download & save checkpoint\n"
+            "• <code>/resume</code>: Resume from last completed item\n"
+            "• <code>/cancel</code>: Cancel active download"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 HELP MENU", callback_data="menu_help")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_help_dl":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 🎬 <b>DOWNLOAD HELP</b>     │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "<b>Supported Media Providers:</b>\n"
+            "• YouTube (up to 4K UHD 2160p)\n"
+            "• HLS / M3U8 streams (AES-128 decrypted)\n"
+            "• KGS & Spayee stream pipelines\n"
+            "• APPX / Classplus lecture streams\n"
+            "• Direct MP4, MKV, WebM, and PDF links\n\n"
+            "⚡ <i>All downloads are split into ~1800 MB safe parts automatically.</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 HELP MENU", callback_data="menu_help")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_help_quality":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 📺 <b>QUALITY GUIDE</b>     │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "<b>How Quality Selection Works:</b>\n"
+            "• Whenever you send a YouTube link, available streams are inspected live.\n"
+            "• If 4K UHD is available, a dedicated 4K button is displayed.\n"
+            "• If a requested quality is missing, the highest available quality is offered.\n"
+            "• You can change quality anytime before download starts."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 HELP MENU", callback_data="menu_help")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_help_drm":
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 🔐 <b>DRM INFORMATION</b>   │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "• Course Wallah includes a built-in DRM checker (<code>/drm</code>).\n"
+            "• It detects Widevine, FairPlay, and encrypted media manifests.\n"
+            "• Standard AES-128 HLS streams are fully supported.\n"
+            "• Protected Widevine DRM streams cannot be bypassed and will be safely flagged."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 HELP MENU", callback_data="menu_help")],
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    elif data == "menu_contact":
+        text, markup = format_contact_card(
+            bot_name=b_name,
+            support_link=s_link,
+            support_username=s_uname
+        )
         await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
     elif data == "menu_subscription":
@@ -3321,20 +3442,23 @@ async def menu_callbacks(client: Client, query: CallbackQuery):
             days_left = "Active"
 
         text = (
-            "👑 <b>COURSE WALLAH SUBSCRIPTION</b>\n\n"
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 👑 <b>MY SUBSCRIPTION</b>   │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
             f"• <b>User ID:</b> <code>{user_id}</code>\n"
             f"• <b>Status:</b> {status_str}\n"
             f"• <b>Valid Till:</b> <code>{valid_till}</code>\n"
             f"• <b>Time Remaining:</b> <code>{days_left}</code>\n\n"
-            "<b>Premium Privileges:</b>\n"
+            "<b>Available Benefits:</b>\n"
             "✅ High Speed Video Streams\n"
+            "✅ 4K UHD Remote Slicing\n"
             "✅ Automatic PDF Extraction\n"
             "✅ Custom Moving Watermarks\n"
-            "✅ Isolated YouTube Cookies\n"
+            "✅ YouTube Cookies Isolation\n"
             "✅ Unlimited Batch Downloads"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="menu_main")]
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
         ])
         await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
@@ -4492,7 +4616,8 @@ async def youtube_quality_callback(client: Client, query: CallbackQuery):
 
     pending = _PENDING_YT_JOBS.pop(job_id, None)
     if not pending:
-        await query.message.edit_text("❌ <i>This download request has expired or was already processed.</i>", parse_mode=enums.ParseMode.HTML)
+        text, markup = format_expired_callback_card()
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     asyncio.create_task(
@@ -4536,7 +4661,8 @@ async def youtube_menu_callback(client: Client, query: CallbackQuery):
     await query.answer()
     pending = _PENDING_YT_JOBS.get(job_id)
     if not pending or not pending.get("media_data"):
-        await query.message.edit_text("❌ <i>This download request has expired.</i>", parse_mode=enums.ParseMode.HTML)
+        text, markup = format_expired_callback_card()
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     media_data = pending["media_data"]
@@ -4578,7 +4704,7 @@ async def youtube_cancel_callback(client: Client, query: CallbackQuery):
 
     await query.answer("Download cancelled")
     _PENDING_YT_JOBS.pop(job_id, None)
-    await query.message.edit_text("❌ <b>Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+    await query.message.edit_text("❌ <b>Download cancelled.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]]), parse_mode=enums.ParseMode.HTML)
 
 
 async def input_cancel_callback(client: Client, query: CallbackQuery):
@@ -4598,6 +4724,33 @@ async def input_cancel_callback(client: Client, query: CallbackQuery):
         await query.message.edit_text("❌ <b>Operation cancelled.</b>", parse_mode=enums.ParseMode.HTML)
     except Exception:
         pass
+
+
+async def input_retry_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user clicking 'TRY AGAIN' on invalid input card.
+    """
+    await query.answer()
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🎓 <b>COURSE WALLAH</b>      │\n"
+        "│   🎬 <b>DOWNLOAD</b>         │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "🔗 <b>Send your media URL</b>\n\n"
+        "You can send:\n"
+        "• YouTube URL (up to 4K UHD)\n"
+        "• Course / Lecture URL\n"
+        "• Direct M3U8 or MP4 Stream\n"
+        "• PDF Study Material link\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💡 <b>Example:</b>\n"
+        "<code>https://youtu.be/...</code>"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 BATCH DOWNLOAD", callback_data="menu_batch")],
+        [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+    ])
+    await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 def add_handler_to_client(client: Client, handler, group: int = 0):
@@ -4686,6 +4839,7 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, CallbackQueryHandler(youtube_menu_callback, filters.regex(r"^ytmenu:")))
     add_handler_to_client(client, CallbackQueryHandler(youtube_cancel_callback, filters.regex(r"^ytcancel:")))
     add_handler_to_client(client, CallbackQueryHandler(input_cancel_callback, filters.regex(r"^input_cancel:")))
+    add_handler_to_client(client, CallbackQueryHandler(input_retry_callback, filters.regex(r"^input_retry:")))
     add_handler_to_client(client, CallbackQueryHandler(features_callback, filters.regex("features")))
     add_handler_to_client(client, CallbackQueryHandler(details_callback, filters.regex("details")))
     add_handler_to_client(client, CallbackQueryHandler(back_to_start_callback, filters.regex("back_to_start")))

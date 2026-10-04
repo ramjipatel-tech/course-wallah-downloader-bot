@@ -1032,26 +1032,254 @@ def format_success_card(
     video_delivered: bool = True,
     pdf_delivered: bool = False,
     split_parts: int = 1,
-    credit: str = CREDIT
+    credit: str = CREDIT,
+    quality: Optional[str] = None,
+    video_codec: Optional[str] = None,
+    audio_codec: Optional[str] = None,
+    total_parts: Optional[int] = None,
+    **kwargs
 ) -> str:
     """Builds a designed Course Wallah completion status card."""
     v_icon = "✅" if video_delivered else "ℹ️ Not Available"
     p_icon = "✅" if pdf_delivered else "ℹ️ Not Available"
-    part_str = f"\n📦 <b>{split_parts} part(s) uploaded</b>" if split_parts > 1 else ""
+    parts_count = total_parts if total_parts is not None else split_parts
+    part_str = f"\n📦 <b>{parts_count} part(s) uploaded</b>" if parts_count > 1 else ""
 
-    return (
-        "╭────────────────────────────╮\n"
-        "│      🎓 <b>COURSE WALLAH</b>      │\n"
-        "│                            │\n"
-        "│     ✅ <b>DOWNLOAD READY</b>      │\n"
-        "╰────────────────────────────╯\n"
-        f"🎬 <b>{lecture_title[:45]}</b>\n\n"
-        f"🎬 Video: {v_icon}\n"
-        f"📄 Study Material: {p_icon}"
-        f"{part_str}\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 <b>{credit or 'Course Wallah'}</b>"
+    lines = [
+        "╭────────────────────────────╮",
+        "│      🎓 <b>COURSE WALLAH</b>      │",
+        "│                            │",
+        "│     ✅ <b>DOWNLOAD READY</b>      │",
+        "╰────────────────────────────╯",
+        f"🎬 <b>{lecture_title[:45]}</b>\n"
+    ]
+    if quality:
+        lines.append(f"📺 <b>Quality:</b> {quality}")
+    if video_codec:
+        lines.append(f"🎞 <b>Video:</b> {video_codec}")
+    if audio_codec:
+        lines.append(f"🔊 <b>Audio:</b> {audio_codec}")
+    lines.append(f"🎬 Video: {v_icon}")
+    lines.append(f"📄 Study Material: {p_icon}")
+    if part_str:
+        lines.append(part_str)
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"🤖 <b>{credit or 'Course Wallah'}</b>")
+    return "\n".join(lines)
+
+
+def format_main_menu(
+    user_id: int,
+    first_name: str,
+    is_admin: bool = False,
+    bot_name: Optional[str] = None,
+    expiry_display: Optional[str] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds the official premium main dashboard for Course Wallah.
+    """
+    bname = (bot_name or "Course Wallah").strip()
+    bname_upper = bname.upper()
+    header_title = f"WELCOME TO {bname_upper}" if "WELCOME" not in bname_upper else bname_upper
+    exp_str = expiry_display or "ACTIVE (Premium Member)"
+    if "ACTIVE" not in exp_str.upper():
+        exp_str = f"ACTIVE ({exp_str})"
+
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        f"│ 🎓 <b>{header_title}</b> │\n"
+        "│   <b>DOWNLOADER BOT</b>      │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "🚀 <i>Fast • Secure • Smart</i>\n\n"
+        "✨ <b>Available Benefits:</b>\n"
+        "• 🎬 <b>Video Downloads</b> (up to 4K)\n"
+        "• 📄 <b>PDF / Notes</b> support\n"
+        "• 📚 <b>Courses & batches</b>\n"
+        "• 🔄 <b>Resume & auto-retry</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Welcome, {first_name}!</b>\n"
+        f"📅 <b>Access:</b> <code>{exp_str}</code>"
     )
+
+    buttons = [
+        [
+            InlineKeyboardButton("🎬 DOWNLOAD", callback_data="menu_download"),
+            InlineKeyboardButton("📚 MY COURSES", callback_data="menu_courses")
+        ],
+        [
+            InlineKeyboardButton("🎯 QUALITY", callback_data="menu_quality"),
+            InlineKeyboardButton("📦 BATCH", callback_data="menu_batch")
+        ],
+        [
+            InlineKeyboardButton("📄 PDF", callback_data="menu_pdf"),
+            InlineKeyboardButton("🔐 DRM CHECK", callback_data="menu_drm")
+        ],
+        [
+            InlineKeyboardButton("💳 SUBSCRIPTION", callback_data="menu_subscription"),
+            InlineKeyboardButton("❓ HELP", callback_data="menu_help")
+        ],
+        [
+            InlineKeyboardButton("📞 CONTACT", callback_data="menu_contact")
+        ]
+    ]
+    if is_admin:
+        buttons.append([InlineKeyboardButton("👑 ADMIN PANEL", callback_data="adm_main")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def format_universal_input_card(
+    action_title: str,
+    instruction: str,
+    example: Optional[str] = None,
+    cancel_callback: Optional[str] = None,
+    user_id: Optional[int] = None,
+    show_home: bool = False
+) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+    """
+    Constructs a universal, clean, premium input prompt card with action title,
+    expected input format, safe example, and navigation buttons.
+    """
+    clean_title = (action_title or "INPUT").upper()
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        "│ 🎓 <b>COURSE WALLAH</b>      │",
+        f"│   <b>{clean_title}</b>",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        f"📝 <b>{instruction}</b>"
+    ]
+    if example:
+        lines.append(f"\n━━━━━━━━━━━━━━━━━━━━━━\n💡 <b>Example:</b> <code>{example}</code>")
+
+    buttons_list = []
+    nav_row = []
+    if show_home:
+        nav_row.append(InlineKeyboardButton("🏠 HOME", callback_data="menu_main"))
+    if cancel_callback:
+        cb = cancel_callback if user_id is None or ":" in cancel_callback else f"{cancel_callback}:{user_id}"
+        nav_row.append(InlineKeyboardButton("❌ CANCEL", callback_data=cb))
+    elif user_id is not None:
+        nav_row.append(InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{user_id}"))
+
+    if nav_row:
+        buttons_list.append(nav_row)
+
+    markup = InlineKeyboardMarkup(buttons_list) if buttons_list else None
+    return "\n".join(lines), markup
+
+
+def format_invalid_input_card(expected_type: str = "URL or file", user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Constructs a clean, non-crashing invalid input card with navigation.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ ⚠️ <b>INVALID INPUT</b>     │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"That doesn't look like a valid <b>{expected_type}</b>.\n\n"
+        "Please check the format and try again."
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 TRY AGAIN", callback_data=f"input_retry:{user_id}"),
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main")
+        ]
+    ])
+    return text, buttons
+
+
+def format_drm_input_card(user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Constructs clean, professional prompt card for /drm command.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🔐 <b>DRM CHECKER & BATCH</b> │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "Send a media URL or supported batch file.\n\n"
+        "🛡️ <i>The checker only reports DRM status.\n"
+        "It does NOT bypass DRM.</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <b>Example:</b> <code>https://...</code> or upload <code>links.txt</code>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{user_id}"),
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main")
+        ]
+    ])
+    return text, buttons
+
+
+def format_drm_result_card(
+    title: str,
+    is_drm: bool,
+    media_type: str = "Stream",
+    details: Optional[str] = None
+) -> str:
+    """
+    Constructs clean DRM check result card without exposing secrets/headers/keys.
+    """
+    clean_title = (title or "Media Stream")[:60]
+    drm_status = "🔴 <b>DRM Protected</b> (Encrypted / Widevine / FairPlay)" if is_drm else "🟢 <b>No DRM Detected</b> (Directly Playable)"
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        "│ 🔐 <b>DRM CHECK RESULT</b>  │",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        f"🎬 <b>Media:</b> <code>{clean_title}</code>",
+        f"📦 <b>Type:</b> <code>{media_type}</code>",
+        f"🛡️ <b>DRM Status:</b> {drm_status}"
+    ]
+    if details:
+        lines.append(f"ℹ️ <b>Details:</b> <i>{details}</i>")
+    elif is_drm:
+        lines.append("ℹ️ <b>Details:</b> <i>Widevine / DRM Protected Stream</i>")
+    else:
+        lines.append("ℹ️ <b>Details:</b> <i>Clear stream (Directly Playable)</i>")
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("⚡ <i>Powered by Course Wallah</i>")
+    return "\n".join(lines)
+
+
+def check_media_drm_status(url: str, timeout: int = 10) -> Dict[str, Any]:
+    """
+    Inspects URL headers or manifest content to detect DRM indicators (MPD ContentProtection, Widevine, FairPlay, PlayReady)
+    without downloading media or exposing tokens.
+    """
+    url_lower = (url or "").lower()
+    if not url:
+        return {"is_drm": False, "details": "Empty URL"}
+
+    if url_lower.endswith(".mp4") or url_lower.endswith(".pdf") or url_lower.endswith(".mkv"):
+        return {"is_drm": False, "details": "Direct Media File"}
+
+    try:
+        import requests
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+        content = resp.text
+        content_lower = content.lower()
+
+        if "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" in content_lower or "widevine" in content_lower:
+            return {"is_drm": True, "details": "Widevine DRM Protected (MPEG-DASH)"}
+        if "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95" in content_lower or "playready" in content_lower:
+            return {"is_drm": True, "details": "PlayReady DRM Protected"}
+        if "com.apple.streamingkeydelivery" in content_lower or "fairplay" in content_lower:
+            return {"is_drm": True, "details": "FairPlay DRM Protected"}
+        if "<contentprotection" in content_lower:
+            return {"is_drm": True, "details": "ContentProtection DRM Detected"}
+        if "#ext-x-key:method=sample-aes" in content_lower:
+            return {"is_drm": True, "details": "Sample-AES DRM Encrypted HLS"}
+
+        if "#extm3u" in content_lower:
+            return {"is_drm": False, "details": "Clear HLS Stream"}
+        if "<mpd" in content_lower:
+            return {"is_drm": False, "details": "Clear MPEG-DASH Stream"}
+
+        return {"is_drm": False, "details": "Clear Stream"}
+    except Exception as e:
+        if ".mpd" in url_lower:
+            return {"is_drm": True, "details": "MPEG-DASH Manifest (Potential DRM)"}
+        return {"is_drm": False, "details": "Clear Media Stream"}
 
 
 def format_youtube_quality_menu(
@@ -1068,14 +1296,14 @@ def format_youtube_quality_menu(
     clean_title = (title or "YouTube Video")[:60]
 
     text = (
-        "╭────────────────────────────╮\n"
-        "│      🎬 <b>VIDEO READY</b>       │\n"
-        "│    ⚡ <b>COURSE WALLAH</b>        │\n"
-        "╰────────────────────────────╯\n\n"
-        f"📌 <b>Title:</b> <code>{clean_title}</code>\n"
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🎬 <b>SELECT QUALITY</b>    │\n"
+        "│    <b>VIDEO READY</b>        │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🎥 <code>{clean_title}</code>\n\n"
         f"⏱ <b>Duration:</b> <code>{dur_str}</code>\n"
-        f"📺 <b>Available Streams:</b> {len(qualities)} options\n\n"
-        "👇 <b>Select Download Quality:</b>"
+        f"📺 <b>Available Qualities:</b> {len(qualities)} streams\n\n"
+        "👇 <b>Choose your preferred quality:</b>"
     )
 
     buttons = []
@@ -1096,7 +1324,7 @@ def format_youtube_quality_menu(
     row = []
     for q in q_other:
         h = q.get("height", 720)
-        badge = q.get("badge", "🎥")
+        badge = q.get("badge", "🎬")
         short_lbl = q.get("short_label", f"{h}p")
         row.append(
             InlineKeyboardButton(
@@ -1111,9 +1339,51 @@ def format_youtube_quality_menu(
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton("❌ Cancel", callback_data=f"ytcancel:{job_id}:{user_id}")
+        InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+        InlineKeyboardButton("❌ CANCEL", callback_data=f"ytcancel:{job_id}:{user_id}")
     ])
 
+    return text, InlineKeyboardMarkup(buttons)
+
+
+format_quality_card = format_youtube_quality_menu
+
+
+def format_4k_available_card(
+    title: str,
+    duration_sec: float,
+    job_id: str,
+    user_id: int,
+    video_codec: str = "VP9",
+    audio_codec: str = "AAC",
+    size_str: Optional[str] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a specialized card when 4K UHD resolution is available.
+    """
+    dur_str = hrt(int(duration_sec)) if duration_sec > 0 else "N/A"
+    clean_title = (title or "YouTube Video")[:60]
+    size_line = f"📦 <b>Size:</b> <code>{size_str}</code>\n" if size_str else ""
+
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🔥 <b>4K UHD AVAILABLE</b>  │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🎥 <code>{clean_title}</code>\n\n"
+        "📺 <b>Resolution:</b> 3840 × 2160\n"
+        f"🎞 <b>Video:</b> {video_codec}\n"
+        f"🔊 <b>Audio:</b> {audio_codec}\n"
+        f"⏱ <b>Duration:</b> {dur_str}\n"
+        f"{size_line}\n"
+        "🚀 <i>Ready for high-speed remote part download!</i>"
+    )
+    buttons = [
+        [InlineKeyboardButton("🔥 DOWNLOAD 4K", callback_data=f"ytq:{job_id}:2160:{user_id}")],
+        [
+            InlineKeyboardButton("🎚 OTHER QUALITY", callback_data=f"ytmenu:{job_id}:{user_id}"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"ytcancel:{job_id}:{user_id}")
+        ]
+    ]
     return text, InlineKeyboardMarkup(buttons)
 
 
@@ -1137,154 +1407,417 @@ def format_youtube_fallback_card(
     req_lbl = "4K UHD (2160p)" if requested_height >= 2160 else f"{requested_height}p"
 
     text = (
-        "╭────────────────────────────╮\n"
-        "│      ⚠️ <b>QUALITY NOTICE</b>     │\n"
-        "│    ⚡ <b>COURSE WALLAH</b>        │\n"
-        "╰────────────────────────────╯\n\n"
-        f"📌 <b>Title:</b> <code>{clean_title}</code>\n"
-        f"⏱ <b>Duration:</b> <code>{dur_str}</code>\n\n"
-        f"⚠️ <b>{req_lbl} is not available for this video.</b>\n"
-        f"🎯 <b>Highest available quality:</b> <b>{target_badge} {target_lbl}</b>\n\n"
-        f"<i>Would you like to download in {target_lbl}?</i>"
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ ⚠️ <b>QUALITY NOTICE</b>    │\n"
+        "│    <b>4K NOT AVAILABLE</b>  │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🎥 <code>{clean_title}</code>\n\n"
+        f"⚠️ <b>{req_lbl} is not available</b> for this video.\n\n"
+        f"🎯 <b>Highest available:</b>\n"
+        f"<b>{target_badge} {target_lbl}</b>\n\n"
+        "<i>Would you like to continue?</i>"
     )
 
     buttons = [
         [InlineKeyboardButton(f"✅ Download {target_lbl}", callback_data=f"ytq:{job_id}:{target_h}:{user_id}")],
-        [InlineKeyboardButton("🎚 Choose Quality", callback_data=f"ytmenu:{job_id}:{user_id}")],
-        [InlineKeyboardButton("❌ Cancel", callback_data=f"ytcancel:{job_id}:{user_id}")]
+        [
+            InlineKeyboardButton("🎚 Choose Quality", callback_data=f"ytmenu:{job_id}:{user_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"ytcancel:{job_id}:{user_id}")
+        ]
     ]
 
     return text, InlineKeyboardMarkup(buttons)
 
 
-def format_universal_input_card(
-    action_title: str,
-    instruction: str,
-    example: Optional[str] = None,
-    cancel_callback: Optional[str] = None,
-    user_id: Optional[int] = None
-) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+format_4k_unavailable_card = format_youtube_fallback_card
+
+
+def format_single_quality_card(
+    title: str,
+    duration_sec: float,
+    quality: Optional[Dict[str, Any]] = None,
+    job_id: str = "",
+    user_id: int = 0,
+    single_quality: Optional[Dict[str, Any]] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
     """
-    Constructs a universal, clean, premium input prompt card with action title,
-    expected input format, safe example, and cancel action.
+    Builds a clean card when only a single playable quality exists.
     """
-    clean_title = (action_title or "INPUT").upper()
-    lines = [
-        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
-        f"│ 🎓 <b>COURSE WALLAH</b>      │",
-        f"│     <b>{clean_title}</b>",
-        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
-        f"📝 <b>{instruction}</b>"
+    target_q = single_quality or quality or {}
+    dur_str = hrt(int(duration_sec)) if duration_sec > 0 else "N/A"
+    clean_title = (title or "YouTube Video")[:60]
+    h = target_q.get("height", 720)
+    lbl = target_q.get("short_label", f"{h}p")
+    badge = target_q.get("badge", "🎬")
+
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🎯 <b>QUALITY FOUND</b>     │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🎥 <code>{clean_title}</code>\n\n"
+        "Only available quality:\n"
+        f"📺 <b>{badge} {lbl}</b>\n"
+        f"⏱ <b>Duration:</b> {dur_str}"
+    )
+    buttons = [
+        [InlineKeyboardButton(f"✅ DOWNLOAD {lbl}", callback_data=f"ytq:{job_id}:{h}:{user_id}")],
+        [
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"ytcancel:{job_id}:{user_id}")
+        ]
     ]
-    if example:
-        lines.append(f"\n━━━━━━━━━━━━━━━━━━━━━━\n💡 <b>Example:</b> <code>{example}</code>")
-
-    buttons = None
-    if cancel_callback:
-        cb = cancel_callback if user_id is None else f"{cancel_callback}:{user_id}"
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data=cb)]
-        ])
-
-    return "\n".join(lines), buttons
+    return text, InlineKeyboardMarkup(buttons)
 
 
-def format_drm_input_card(user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+def format_batch_input_card(user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
     """
-    Constructs clean, professional prompt card for /drm command.
+    Builds the batch downloader file prompt card.
     """
     text = (
-        "╭────────────────────────╮\n"
-        "│ 🔐 <b>DRM CHECKER & BATCH</b> │\n"
-        "╰────────────────────────╯\n\n"
-        "📝 <b>Send the media URL you want to check</b>\n"
-        "<i>or send a <code>.txt</code> file containing course links.</i>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⚠️ <i>Only send authorized media or course links.</i>\n"
-        "💡 <b>Example:</b> <code>https://...</code> or upload <code>links.txt</code>"
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 📦 <b>BATCH DOWNLOADER</b>  │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "Send your <code>.txt</code> file.\n\n"
+        "• Each URL will be processed independently.\n"
+        "• One failed URL will NOT stop the remaining batch.\n"
+        "• Pause & resume available at any time."
     )
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Cancel", callback_data=f"input_cancel:{user_id}")]
+        [
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{user_id}")
+        ]
     ])
     return text, buttons
 
 
-def format_drm_result_card(
+def format_batch_summary_card(
+    total_urls: int,
+    ready_count: int,
+    invalid_count: int,
+    subject: str = "General",
+    course: str = "Course",
+    batch_id: str = "0",
+    user_id: int = 0
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a summary card after receiving a batch file.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 📦 <b>BATCH RECEIVED</b>    │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"📚 <b>Course:</b> {course}\n"
+        f"📝 <b>Subject:</b> {subject}\n\n"
+        f"🔗 <b>URLs found:</b> {total_urls}\n"
+        f"✅ <b>Ready:</b> {ready_count}\n"
+        f"⚠️ <b>Invalid:</b> {invalid_count}"
+    )
+    cb_start = f"start_batch:{batch_id}:{user_id}" if batch_id != "0" else "menu_drm"
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 START BATCH", callback_data=cb_start),
+            InlineKeyboardButton("❌ CANCEL", callback_data="menu_main")
+        ]
+    ])
+    return text, buttons
+
+
+def format_chat_id_card(
+    chat_id: int = 0,
+    chat_type: str = "Chat",
+    title: Optional[str] = None,
+    username: Optional[str] = None,
+    thread_id: Optional[int] = None,
+    user_id: Optional[int] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a clean, structured Chat ID setup card.
+    """
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        "│ 🆔 <b>CHAT ID SETUP</b>     │",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        "Send the Telegram Chat ID or target ID.\n",
+        f"🆔 <b>Chat ID:</b> <code>{chat_id or '-1001234567890'}</code>",
+        f"🏷 <b>Type:</b> <code>{chat_type}</code>"
+    ]
+    if title:
+        lines.append(f"📌 <b>Title:</b> {title}")
+    if username:
+        lines.append(f"👤 <b>Username:</b> @{username}")
+    if user_id:
+        lines.append(f"👤 <b>User ID:</b> <code>{user_id}</code>")
+    if thread_id:
+        lines.append(f"💬 <b>Topic / Thread ID:</b> <code>{thread_id}</code>")
+
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("💡 <b>Example:</b> <code>-1001234567890</code>")
+
+    cb_user = user_id or 0
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{cb_user}")
+        ]
+    ])
+    return "\n".join(lines), buttons
+
+
+def format_api_token_card(provider_name: str = "API", user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a secure API/token configuration card that never echoes credentials.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🔑 <b>API CONFIGURATION</b> │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"Send the <b>{provider_name}</b> API key or token.\n\n"
+        "⚠️ <i>Never share this credential publicly.\n"
+        "It will not be displayed back in Telegram.</i>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{user_id}")
+        ]
+    ])
+    return text, buttons
+
+
+def format_watermark_input_card(user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a clean watermark text configuration card.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 💧 <b>WATERMARK SETUP</b>   │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "Send the watermark text to apply onto videos.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <b>Example:</b> <code>Course Wallah</code>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"input_cancel:{user_id}")
+        ]
+    ])
+    return text, buttons
+
+
+def format_help_menu_card(bot_name: Optional[str] = None) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds the interactive Help & Support navigation card.
+    """
+    bname = bot_name or "Course Wallah"
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ ❓ <b>HELP & SUPPORT</b>    │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"Welcome to <b>{bname}</b> help center.\n\n"
+        "Choose an option below to learn more:"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📖 HOW TO USE", callback_data="menu_help_how"),
+            InlineKeyboardButton("🎬 DOWNLOAD HELP", callback_data="menu_help_dl")
+        ],
+        [
+            InlineKeyboardButton("📺 QUALITY HELP", callback_data="menu_help_quality"),
+            InlineKeyboardButton("🔐 DRM INFO", callback_data="menu_help_drm")
+        ],
+        [
+            InlineKeyboardButton("📞 CONTACT SUPPORT", callback_data="menu_contact"),
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main")
+        ]
+    ])
+    return text, buttons
+
+
+def format_contact_card(
+    bot_name: Optional[str] = None,
+    support_link: Optional[str] = None,
+    support_username: Optional[str] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a clean support contact card without broken/fake links.
+    """
+    bname = bot_name or "Course Wallah"
+    s_link = support_link or ""
+    s_uname = support_username or ""
+
+    if not s_link and not s_uname:
+        text = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "│ 📞 <b>CONTACT SUPPORT</b>   │\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            "📞 <i>Support contact is currently unavailable.</i>\n\n"
+            "Please check back later or contact your group administrator."
+        )
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+        ])
+        return text, buttons
+
+    contact_display = f"@{s_uname}" if s_uname else "Official Support"
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 📞 <b>CONTACT SUPPORT</b>   │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"Need assistance with <b>{bname}</b>?\n\n"
+        f"💬 <b>Support Contact:</b> <code>{contact_display}</code>\n\n"
+        "Click the button below to message our support desk directly."
+    )
+    target_url = s_link if s_link.startswith("http") else f"https://t.me/{s_uname}"
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 MESSAGE SUPPORT", url=target_url)],
+        [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+    ])
+    return text, buttons
+
+
+def format_status_card(
     title: str,
-    is_drm: bool,
-    media_type: str = "Stream",
-    details: Optional[str] = None
+    quality: Optional[str] = None,
+    video_codec: Optional[str] = "VP9",
+    audio_codec: Optional[str] = "AAC",
+    current_part: Optional[int] = None,
+    total_parts: Optional[int] = None,
+    phase: str = "UPLOADING",
+    percent: Optional[float] = None,
+    speed_str: Optional[str] = None,
+    eta_str: Optional[str] = None,
+    header_tag: str = "DOWNLOADER"
 ) -> str:
     """
-    Constructs clean DRM check result card without exposing secrets/headers/keys.
+    Builds a unified real-time download/upload status card.
     """
-    clean_title = (title or "Media Stream")[:60]
-    drm_status = "🔴 <b>DRM Protected</b> (Encrypted / Widevine / PlayReady)" if is_drm else "🟢 <b>No DRM Detected</b> (Directly Playable & Downloadable)"
+    clean_title = (title or "Video Stream")[:50]
     lines = [
-        "╭────────────────────────╮",
-        "│ 🔐 <b>DRM CHECK RESULT</b>    │",
-        "╰────────────────────────╯\n",
-        f"🎬 <b>Media:</b> <code>{clean_title}</code>",
-        f"📦 <b>Type:</b> <code>{media_type}</code>",
-        f"🛡️ <b>DRM Status:</b> {drm_status}"
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        "│ 🎓 <b>COURSE WALLAH</b>      │",
+        f"│ 🔥 <b>{header_tag.upper()}</b>",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        f"🎬 <code>{clean_title}</code>\n"
     ]
-    if details:
-        lines.append(f"ℹ️ <b>Details:</b> <i>{details}</i>")
-    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("⚡ <i>Powered by Course Wallah</i>")
+    if quality:
+        lines.append(f"📺 <b>Quality:</b> {quality}")
+    if video_codec:
+        lines.append(f"🎞 <b>Video:</b> {video_codec}")
+    if audio_codec:
+        lines.append(f"🔊 <b>Audio:</b> {audio_codec}")
+
+    if current_part is not None and total_parts is not None and total_parts > 1:
+        lines.append(f"\n✂️ <b>Part {current_part} / {total_parts}</b>")
+
+    lines.append(f"\n📤 <b>{phase.title()}...</b>")
+
+    if percent is not None:
+        p = max(0.0, min(100.0, float(percent)))
+        filled = int(p / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        extra = []
+        if speed_str:
+            extra.append(speed_str)
+        if eta_str:
+            extra.append(f"ETA {eta_str}")
+        extra_str = f" • {' '.join(extra)}" if extra else ""
+        lines.append(f"<code>{bar}</code> {p:.1f}%{extra_str}")
+
     return "\n".join(lines)
 
 
-def check_media_drm_status(url: str) -> Dict[str, Any]:
+def format_success_card_with_buttons(
+    title: str,
+    quality: Optional[str] = None,
+    video_codec: Optional[str] = None,
+    audio_codec: Optional[str] = None,
+    total_parts: int = 1,
+    credit: Optional[str] = None
+) -> Tuple[str, InlineKeyboardMarkup]:
     """
-    Safely probes media URL for DRM encryption without exposing tokens/keys/headers.
+    Builds a premium download completion card with navigation.
     """
-    clean_title = MediaRouter.extract_clean_title(url, "Media Stream")
-    m_type = MediaRouter.classify_url(url)
-    
-    is_drm = False
-    details = "Clean playable media stream."
-    type_lbl = m_type.value.upper()
-    
-    # Check for DASH/MPD or Widevine
-    url_lower = url.lower()
-    if ".mpd" in url_lower or "mpd" in url_lower:
-        type_lbl = "MPEG-DASH / MPD"
-        try:
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            if "ContentProtection" in r.text or "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" in r.text or "cenc" in r.text:
-                is_drm = True
-                details = "Widevine / Common Encryption (CENC) DRM detected."
-            else:
-                details = "Clear/unencrypted DASH manifest."
-        except Exception:
-            details = "DASH manifest (status unverified)."
-    elif ".m3u8" in url_lower or "m3u8" in url_lower:
-        type_lbl = "HLS / M3U8"
-        try:
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            if "#EXT-X-KEY:METHOD=SAMPLE-AES" in r.text or "SAMPLE-AES-CTR" in r.text:
-                is_drm = True
-                details = "FairPlay / Sample-AES DRM detected."
-            elif "#EXT-X-KEY:METHOD=AES-128" in r.text:
-                details = "AES-128 HLS standard encrypted (Supported via Course Wallah)."
-            else:
-                details = "Clear HLS stream."
-        except Exception:
-            details = "HLS playlist."
-    elif "youtube" in url_lower or "youtu.be" in url_lower:
-        type_lbl = "YouTube Video"
-        details = "YouTube stream (Supported via YTUltra 4K pipeline)."
-    else:
-        type_lbl = f"Direct {m_type.value.title()}"
-        details = "Standard media URL."
+    clean_title = (title or "Video Stream")[:50]
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        "│ ✅ <b>DOWNLOAD COMPLETE</b> │",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        f"🎬 <code>{clean_title}</code>\n"
+    ]
+    if quality:
+        lines.append(f"📺 <b>Quality:</b> {quality}")
+    if video_codec:
+        lines.append(f"🎞 <b>Video:</b> {video_codec}")
+    if audio_codec:
+        lines.append(f"🔊 <b>Audio:</b> {audio_codec}")
+    if total_parts > 1:
+        lines.append(f"📦 <b>Total Parts:</b> {total_parts}")
 
-    return {
-        "title": clean_title,
-        "is_drm": is_drm,
-        "type": type_lbl,
-        "details": details
-    }
+    lines.append("\n🚀 <i>Successfully uploaded to Telegram.</i>")
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 HOME", callback_data="menu_main")]
+    ])
+    return "\n".join(lines), buttons
+
+
+def format_failure_card(
+    title: str,
+    reason: str = "Processing error",
+    job_id: Optional[str] = None,
+    user_id: Optional[int] = None,
+    can_retry: bool = True,
+    can_choose_quality: bool = False
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a human-friendly failure card with safe explanation and recovery actions.
+    """
+    clean_title = (title or "Media Item")[:50]
+    clean_reason = sanitize_error_message(reason)[:180]
+
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ ❌ <b>DOWNLOAD FAILED</b>   │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🎬 <code>{clean_title}</code>\n\n"
+        "Something went wrong while processing this video.\n\n"
+        f"<b>Reason:</b>\n<i>{clean_reason}</i>"
+    )
+
+    action_row = []
+    if can_retry and job_id:
+        action_row.append(InlineKeyboardButton("🔄 RETRY", callback_data=f"retry_fail_{job_id}"))
+    if can_choose_quality and job_id and user_id:
+        action_row.append(InlineKeyboardButton("🎚 QUALITY", callback_data=f"ytmenu:{job_id}:{user_id}"))
+
+    buttons = []
+    if action_row:
+        buttons.append(action_row)
+    buttons.append([InlineKeyboardButton("🏠 HOME", callback_data="menu_main")])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def format_expired_callback_card() -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a card for stale or expired inline callbacks.
+    """
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ ⚠️ <b>ACTION EXPIRED</b>    │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "This action has expired or was already completed.\n\n"
+        "Please initiate a new request from the dashboard."
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 START AGAIN", callback_data="menu_download"),
+            InlineKeyboardButton("🏠 HOME", callback_data="menu_main")
+        ]
+    ])
+    return text, buttons
 
 
 def format_bot_online_card(
@@ -1299,33 +1832,31 @@ def format_bot_online_card(
     """
     uname_str = f"@{bot_username}" if bot_username else bot_name
     now_str = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-    
-    rec_line = f"♻️ <b>Recovery scan completed:</b> {recovered_jobs} job(s) restored\n" if recovered_jobs > 0 else "♻️ <b>Recovery scan completed:</b> No unfinished jobs found\n"
+    rec_line = f"♻️ <b>Recovery scan:</b> {recovered_jobs} job(s) restored\n" if recovered_jobs > 0 else "♻️ <b>Recovery scan:</b> Clean state\n"
 
     text = (
         "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
         "│ 🎓 <b>COURSE WALLAH</b>      │\n"
-        "│      <b>BOT ONLINE</b>       │\n"
+        "│       <b>ONLINE</b>          │\n"
         "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
         "🟢 <b>Bot is now ONLINE & LIVE</b>\n\n"
-        "⚡ <b>Downloader:</b> READY\n"
-        "🎬 <b>YouTube:</b> READY\n"
-        "🔥 <b>4K Remote Pipeline:</b> READY\n"
-        "📺 <b>Quality Selector:</b> READY\n"
-        "📤 <b>Telegram Upload:</b> READY\n"
-        "🔄 <b>Auto Recovery:</b> ENABLED\n\n"
+        "⚡ <b>High-Speed Downloader</b>\n"
+        "🔥 <b>4K Quality Support</b>\n"
+        "🎬 <b>Smart Quality Selection</b>\n"
+        "🔄 <b>Auto URL Refresh</b>\n"
+        "♻️ <b>Auto Recovery</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🤖 <b>{bot_name}</b> (<code>{uname_str}</code>)\n"
         f"🟢 <b>Status:</b> ONLINE ({active_bots}/{total_bots} active)\n"
-        f"🕐 <b>Time:</b> <code>{now_str}</code>\n\n"
+        f"🕐 <b>Time:</b> <code>{now_str}</code>\n"
         f"{rec_line}\n"
-        "🚀 <b>Course Wallah is ready!</b>\n"
-        "Use /start to begin."
+        "🚀 <b>Ready to download.</b>"
     )
     buttons = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🚀 Start", callback_data="help_menu"),
-            InlineKeyboardButton("❓ Help", callback_data="help_menu")
+            InlineKeyboardButton("🚀 START", callback_data="menu_main"),
+            InlineKeyboardButton("📚 COURSES", callback_data="menu_courses"),
+            InlineKeyboardButton("❓ HELP", callback_data="menu_help")
         ]
     ])
     return text, buttons

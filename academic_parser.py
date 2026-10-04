@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Tuple
+from vars import CREDIT, BOT_LINK
 
 @dataclass
 class AcademicItem:
@@ -403,7 +404,8 @@ def build_enriched_caption(
     subject_line = f"<blockquote><b>📚 Subject » {subject_name}</b></blockquote>\n" if subject_name else ""
     course_display = b_name
 
-    credit_str = cr or '<a href="https://t.me/course_wallah_official_bot">𝄟⃝⚡️ Course Wallah 🎓 🔥</a>'
+    credit_str = cr or CREDIT
+    ext_link = f"<a href='{BOT_LINK}'>𝄟⃝⚡️ Course Wallah 🎓 🔥</a>"
 
     return (
         f"<blockquote><b> ——— ✦ {str(count).zfill(3)} ✦——— </b></blockquote>\n\n"
@@ -412,7 +414,7 @@ def build_enriched_caption(
         f"{unit_line}"
         f"{topic_line}"
         f"<blockquote><b> 🎬 Title : {item_title}</b></blockquote>\n\n"
-        f"<blockquote><b> ├── Extention : <a href='https://t.me/course_wallah_official_bot'>𝄟⃝⚡️ Course Wallah 🎓 🔥</a>.{ext}</b></blockquote>\n"
+        f"<blockquote><b> ├── Extention : {ext_link}.{ext}</b></blockquote>\n"
         f"├── Resolution : {height}p ({width} × {height})\n\n"
         f"{subject_line}"
         f"<blockquote><b> 📚 Course » {course_display}</b></blockquote>\n\n"

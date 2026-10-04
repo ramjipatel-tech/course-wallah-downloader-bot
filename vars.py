@@ -17,13 +17,15 @@ API_HASH = os.environ.get("API_HASH", "").strip().strip("'\"")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip().strip("'\"")
 
 BOT_NAME = os.environ.get("BOT_NAME", "Course Wallah Downloader").strip().strip("'\"")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "course_wallah_official_bot").strip().strip("'\"")
-BOT_LINK = os.environ.get("BOT_LINK", "https://t.me/course_wallah_official_bot").strip().strip("'\"")
-SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/course_wallah_official_bot").strip().strip("'\"")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "downloader_course_wallah_bot").strip().strip("'\"")
+BOT_LINK = os.environ.get("BOT_LINK", f"https://t.me/{BOT_USERNAME}").strip().strip("'\"")
+SUPPORT_LINK = os.environ.get("SUPPORT_LINK", f"https://t.me/{BOT_USERNAME}").strip().strip("'\"")
+SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", BOT_USERNAME).strip().strip("'\"")
+SUPPORT_CHAT = os.environ.get("SUPPORT_CHAT", "").strip().strip("'\"")
 
 CREDIT = os.environ.get(
     "CREDIT",
-    '<a href="https://t.me/course_wallah_official_bot">𝄟⃝⚡️ 🅲🅾🆄🆁🆂🅴 🆆🅰🅻🅻🅰🅷 💻 𝄟⃝🎓 🔥</a>'
+    f'<a href="{BOT_LINK}">𝄟⃝⚡️ 🅲🅾🆄🆁🆂🅴 🆆🅰🅻🅻🅰🅷 💻 𝄟⃝🎓 🔥</a>'
 )
 
 # ==============================================================================

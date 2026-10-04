@@ -331,9 +331,9 @@ class Database:
         try:
             users = safe_json_read(self.users_file, dict)
             usernames = list({u.get("bot_username") for u in users.values() if u.get("bot_username")})
-            return usernames if usernames else ["course_wallah_official_bot"]
+            return usernames if usernames else [BOT_USERNAME]
         except Exception:
-            return ["course_wallah_official_bot"]
+            return [BOT_USERNAME]
 
     async def cleanup_expired_users(self, bot=None) -> int:
         removed = 0
