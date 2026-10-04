@@ -101,7 +101,8 @@ from vars import (
     PW_TOKEN,
     COOKIES_FILE,
     THUMBNAILS,
-    MAX_UPLOAD_SIZE_BYTES
+    MAX_UPLOAD_SIZE_BYTES,
+    BOT_STATUS_CHAT_ID
 )
 import vars
 from db import db
@@ -135,6 +136,11 @@ from utils import (
     format_success_card,
     format_youtube_quality_menu,
     format_youtube_fallback_card,
+    format_universal_input_card,
+    format_drm_input_card,
+    format_drm_result_card,
+    format_bot_online_card,
+    check_media_drm_status,
     get_disk_storage_info,
     cleanup_uploaded_file,
     cleanup_job_temp_dir,
@@ -876,6 +882,21 @@ async def drm_cmd(client: Client, message: Message, doc_message: Message = None)
         await message.reply_text("⚠️ You already have an active download running! Use /status to check or /stop to pause it.")
         return
 
+    # Check for direct URL in message arguments (e.g. /drm https://...)
+    cmd_text = (message.text or message.caption or "").strip()
+    cmd_parts = cmd_text.split(maxsplit=1)
+    if len(cmd_parts) > 1 and cmd_parts[1].startswith(("http://", "https://")):
+        target_url = cmd_parts[1].strip()
+        status_info = check_media_drm_status(target_url)
+        res_card = format_drm_result_card(
+            title=status_info.get("title", "Media Stream"),
+            is_drm=status_info.get("is_drm", False),
+            media_type=status_info.get("type", "Stream"),
+            details=status_info.get("details")
+        )
+        await message.reply_text(res_card)
+        return
+
     direct_doc = doc_message or (message if message.document and message.document.file_name and message.document.file_name.lower().endswith(".txt") else None)
 
     if direct_doc and direct_doc.document:
@@ -883,21 +904,43 @@ async def drm_cmd(client: Client, message: Message, doc_message: Message = None)
         input_doc = direct_doc
         doc_path = await input_doc.download()
     else:
-        b_name = get_bot_display_name(client)
-        editable = await message.reply_text(
-            f"<b>📥 {b_name} — Batch Downloader</b>\n\n"
-            "<blockquote>Please send your <code>.txt</code> file containing course links.\n"
-            "Format: <code>Title : URL</code></blockquote>"
-        )
+        prompt_text, prompt_markup = format_drm_input_card(user_id=user_id)
+        editable = await message.reply_text(prompt_text, reply_markup=prompt_markup)
 
         try:
             input_doc: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=120)
         except asyncio.TimeoutError:
-            await editable.edit("⏱ Timed out waiting for file. Send /drm when ready.")
+            await editable.edit("⏱ Timed out waiting for file or URL. Send /drm when ready.")
             return
 
+        # Check for cancel or URL input
+        if input_doc.text:
+            in_text = input_doc.text.strip()
+            if in_text.lower() in ("/cancel", "cancel"):
+                try:
+                    await input_doc.delete(True)
+                except Exception:
+                    pass
+                await editable.edit("❌ <b>Operation cancelled.</b>")
+                return
+
+            if in_text.startswith(("http://", "https://")):
+                try:
+                    await input_doc.delete(True)
+                except Exception:
+                    pass
+                status_info = check_media_drm_status(in_text)
+                res_card = format_drm_result_card(
+                    title=status_info.get("title", "Media Stream"),
+                    is_drm=status_info.get("is_drm", False),
+                    media_type=status_info.get("type", "Stream"),
+                    details=status_info.get("details")
+                )
+                await editable.edit(res_card)
+                return
+
         if not input_doc.document or not input_doc.document.file_name.endswith('.txt'):
-            await editable.edit("❌ Please send a valid <code>.txt</code> file!")
+            await editable.edit("❌ Please send a valid <code>.txt</code> file or media URL!")
             return
 
         doc_path = await input_doc.download()
@@ -932,98 +975,160 @@ async def drm_cmd(client: Client, message: Message, doc_message: Message = None)
     vid_count = total_links - (pdf_count + img_count + zip_count)
 
     units_count = len([u for u in course_data.units if u.number != 0])
-    await editable.edit(
-        f"<b>📚 Subject:</b> <code>{course_data.subject}</code>\n"
-        f"<b>📖 Course:</b> <code>{course_data.course}</code>\n"
-        f"<b>📌 Units Detected:</b> <code>{units_count}</code>\n"
-        f"<b>🔗 Total Links:</b> <code>{total_links}</code>\n\n"
-        f"🎥 Videos: <b>{vid_count}</b> | 📑 PDFs: <b>{pdf_count}</b> | 🖼 Images: <b>{img_count}</b>\n\n"
-        f"👉 <b>Send Start Index (1 - {total_links}) or send /d for 1:</b>"
+    card_1, mark_1 = format_universal_input_card(
+        "BATCH START INDEX",
+        f"Subject: {course_data.subject}\nCourse: {course_data.course}\nUnits: {units_count} | Items: {total_links}\n🎥 Videos: {vid_count} | 📑 PDFs: {pdf_count}\n\nSend Start Index (1 - {total_links}) or send /d for 1:",
+        example="1 or /d",
+        cancel_callback="input_cancel",
+        user_id=user_id
     )
+    await editable.edit(card_1, reply_markup=mark_1)
 
     # 1. Start Index
     try:
         idx_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        idx_text = idx_msg.text.strip()
+        idx_text = idx_msg.text.strip() if idx_msg.text else "/d"
         await idx_msg.delete(True)
+        if idx_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         start_idx = 1 if idx_text == "/d" else int(idx_text)
     except Exception:
         start_idx = 1
     start_idx = max(1, min(start_idx, total_links))
 
     # 2. Batch Name
-    await editable.edit("<b>🏷️ Send Batch Name or send /d for default:</b>")
+    card_2, mark_2 = format_universal_input_card(
+        "BATCH NAME",
+        f"Send Batch Name or send /d for default ('{course_data.course}'):",
+        example=course_data.course,
+        cancel_callback="input_cancel",
+        user_id=user_id
+    )
+    await editable.edit(card_2, reply_markup=mark_2)
     try:
         b_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        b_text = b_msg.text.strip()
+        b_text = b_msg.text.strip() if b_msg.text else "/d"
         await b_msg.delete(True)
+        if b_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         batch_name = course_data.course if b_text == "/d" else b_text
     except Exception:
         batch_name = course_data.course
 
     # 3. Resolution
-    await editable.edit(
-        "<b>🎞️ Select Video Resolution:</b>\n\n"
-        "• <code>360</code>\n"
-        "• <code>480</code> (Recommended)\n"
-        "• <code>720</code>\n"
-        "• <code>1080</code>\n\n"
-        "Send number or /d for 480:"
+    card_3, mark_3 = format_universal_input_card(
+        "VIDEO RESOLUTION",
+        "Select video resolution:\n• 360p\n• 480p (Recommended)\n• 720p\n• 1080p\n• 2160p (4K UHD)\n\nSend resolution or /d for 480p:",
+        example="720 or /d",
+        cancel_callback="input_cancel",
+        user_id=user_id
     )
+    await editable.edit(card_3, reply_markup=mark_3)
     try:
         res_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        res_text = res_msg.text.strip()
+        res_text = res_msg.text.strip() if res_msg.text else "/d"
         await res_msg.delete(True)
+        if res_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         quality = "480p" if res_text in ("/d", "") else (f"{res_text}p" if not res_text.endswith("p") else res_text)
     except Exception:
         quality = "480p"
 
     # 4. Watermark
-    await editable.edit(
-        "<b>🎨 Watermark Settings:</b>\n\n"
-        "• Send text for custom watermark\n"
-        "• Send <code>/d</code> for default watermark\n"
-        "• Send <code>no</code> to disable watermark"
+    card_4, mark_4 = format_universal_input_card(
+        "WATERMARK SETTINGS",
+        f"Send custom watermark text, /d for '{WATERMARK_TEXT}', or 'no' to disable:",
+        example=f"/d or {WATERMARK_TEXT}",
+        cancel_callback="input_cancel",
+        user_id=user_id
     )
+    await editable.edit(card_4, reply_markup=mark_4)
     try:
         wm_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        wm_text = wm_msg.text.strip()
+        wm_text = wm_msg.text.strip() if wm_msg.text else "/d"
         await wm_msg.delete(True)
+        if wm_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         wm_val = WATERMARK_TEXT if wm_text == "/d" else wm_text
     except Exception:
         wm_val = WATERMARK_TEXT
 
     # 5. Credit
-    await editable.edit("<b>👤 Send Caption Credit or send /d for default:</b>")
+    card_5, mark_5 = format_universal_input_card(
+        "CAPTION CREDIT",
+        "Send caption credit or send /d for default:",
+        example="/d",
+        cancel_callback="input_cancel",
+        user_id=user_id
+    )
+    await editable.edit(card_5, reply_markup=mark_5)
     try:
         cr_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        cr_text = cr_msg.text.strip()
+        cr_text = cr_msg.text.strip() if cr_msg.text else "/d"
         await cr_msg.delete(True)
+        if cr_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         credit_val = CREDIT if cr_text == "/d" else cr_text
     except Exception:
         credit_val = CREDIT
 
     # 6. PW Token (optional)
-    await editable.edit("<b>🔑 Send PW Token or send /d for none:</b>")
+    card_6, mark_6 = format_universal_input_card(
+        "PW TOKEN (OPTIONAL)",
+        "Send PW Token or send /d for none:",
+        example="/d",
+        cancel_callback="input_cancel",
+        user_id=user_id
+    )
+    await editable.edit(card_6, reply_markup=mark_6)
     try:
         pw_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        pw_text = pw_msg.text.strip()
+        pw_text = pw_msg.text.strip() if pw_msg.text else "/d"
         await pw_msg.delete(True)
+        if pw_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         pw_token = "/d" if pw_text == "/d" else pw_text
     except Exception:
         pw_token = "/d"
 
     # 7. Thumbnail
     batch_thumb_url = getattr(course_data, "structured_batch", None).thumbnail if getattr(course_data, "structured_batch", None) else None
-    await editable.edit(
-        "<b>🖼️ Thumbnail Setup:</b>\n\n"
-        "• Send a photo for custom thumbnail\n"
-        "• Send <code>/d</code> for default thumbnail\n"
-        "• Send <code>/skip</code> to skip thumbnail"
+    card_7, mark_7 = format_universal_input_card(
+        "THUMBNAIL SETUP",
+        "Send a photo for custom thumbnail, /d for default, or /skip to skip:",
+        example="/d or send a photo",
+        cancel_callback="input_cancel",
+        user_id=user_id
     )
+    await editable.edit(card_7, reply_markup=mark_7)
     thumb_val = batch_thumb_url if batch_thumb_url else "/d"
     try:
         th_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
+        if th_msg.text and th_msg.text.strip().lower() in ("/cancel", "cancel"):
+            await th_msg.delete(True)
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
+
         if th_msg.photo:
             os.makedirs("downloads", exist_ok=True)
             custom_th = f"downloads/thumb_{user_id}.jpg"
@@ -1041,15 +1146,23 @@ async def drm_cmd(client: Client, message: Message, doc_message: Message = None)
         thumb_val = batch_thumb_url if batch_thumb_url else "/d"
 
     # 8. Channel ID
-    await editable.edit(
-        "<b>📢 Destination Channel / Supergroup:</b>\n\n"
-        "<blockquote>Send Channel ID (e.g. <code>-1001234567890</code>)\n"
-        "Or send <code>/d</code> to upload right here.</blockquote>"
+    card_8, mark_8 = format_universal_input_card(
+        "DESTINATION CHANNEL",
+        "Send Channel ID (e.g. -1001234567890) or /d to upload right here:",
+        example="/d or -1001234567890",
+        cancel_callback="input_cancel",
+        user_id=user_id
     )
+    await editable.edit(card_8, reply_markup=mark_8)
     try:
         ch_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=30)
-        ch_text = ch_msg.text.strip()
+        ch_text = ch_msg.text.strip() if ch_msg.text else "/d"
         await ch_msg.delete(True)
+        if ch_text.lower() in ("/cancel", "cancel"):
+            await editable.edit("❌ <b>Batch operation cancelled.</b>")
+            if os.path.exists(doc_path):
+                os.remove(doc_path)
+            return
         channel_id = message.chat.id if ch_text == "/d" else int(ch_text)
     except Exception:
         channel_id = message.chat.id
@@ -4468,6 +4581,24 @@ async def youtube_cancel_callback(client: Client, query: CallbackQuery):
     await query.message.edit_text("❌ <b>Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
 
 
+async def input_cancel_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user cancelling an active input prompt via universal input cards.
+    """
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) >= 2 and parts[1].isdigit():
+        expected_uid = int(parts[1])
+        if expected_uid != 0 and query.from_user and query.from_user.id != expected_uid:
+            await query.answer("⚠️ This input prompt belongs to another user.", show_alert=True)
+            return
+
+    try:
+        await query.answer("Cancelled")
+        await query.message.edit_text("❌ <b>Operation cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        pass
+
 
 def add_handler_to_client(client: Client, handler, group: int = 0):
     """Safely register handler synchronously on Pyrogram dispatcher without floating loop tasks."""
@@ -4554,6 +4685,7 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, CallbackQueryHandler(youtube_quality_callback, filters.regex(r"^ytq:")))
     add_handler_to_client(client, CallbackQueryHandler(youtube_menu_callback, filters.regex(r"^ytmenu:")))
     add_handler_to_client(client, CallbackQueryHandler(youtube_cancel_callback, filters.regex(r"^ytcancel:")))
+    add_handler_to_client(client, CallbackQueryHandler(input_cancel_callback, filters.regex(r"^input_cancel:")))
     add_handler_to_client(client, CallbackQueryHandler(features_callback, filters.regex("features")))
     add_handler_to_client(client, CallbackQueryHandler(details_callback, filters.regex("details")))
     add_handler_to_client(client, CallbackQueryHandler(back_to_start_callback, filters.regex("back_to_start")))
@@ -4676,14 +4808,28 @@ async def setup_bot_commands(client: Client):
 
 
 async def start_single_bot(bot_ctx: BotContext) -> bool:
-    """Start an individual bot client, handling session locks gracefully."""
+    """Start or reconnect an individual bot client, handling session locks gracefully."""
     client = bot_ctx.client
     bot_name = bot_ctx.bot_name
     print(f"\n[{bot_name}] Connecting...")
     logger.info(f"[{bot_name}] Connecting session: {bot_ctx.session_name} (workdir: {getattr(client, 'workdir', SESSIONS_DIR)})")
 
     try:
-        await client.start()
+        is_conn = (getattr(client, "is_connected", False) is True)
+        is_init = (getattr(client, "is_initialized", False) is True)
+        if not is_conn:
+            if not is_init:
+                await client.start()
+            else:
+                try:
+                    await client.connect()
+                except Exception:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    await client.start()
+
         me = await client.get_me()
         bot_ctx.bot_user_id = me.id
         bot_ctx.bot_username = me.username or ""
@@ -4694,6 +4840,7 @@ async def start_single_bot(bot_ctx: BotContext) -> bool:
         bot_ctx.bot_link = f"https://t.me/{me.username}" if me.username else ""
         bot_ctx.bot_is_bot = getattr(me, "is_bot", True)
         bot_ctx.is_online = True
+        bot_ctx.error = None
 
         if me.username:
             print(f"[{bot_name}] Connected as @{me.username}")
@@ -4712,14 +4859,54 @@ async def start_single_bot(bot_ctx: BotContext) -> bool:
         bot_ctx.is_online = False
         return False
     except Exception as e:
-        import traceback
         err_msg = str(e)
         print(f"[{bot_name}] Connection failed: {err_msg}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        logger.error(f"[{bot_name}] Connection failed: {err_msg}", exc_info=True)
+        logger.error(f"[{bot_name}] Connection failed: {err_msg}")
         bot_ctx.error = err_msg
         bot_ctx.is_online = False
         return False
+
+
+async def bot_health_watchdog(bot_contexts: List[BotContext], interval_sec: float = 15.0):
+    """
+    Background health watchdog that continuously monitors each configured bot client.
+    Automatically reconnects dropped sessions with bounded exponential backoff.
+    Guarantees per-bot isolation so that one client reconnecting does not disrupt other bots.
+    """
+    backoff_delays = [1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+    bot_attempts: Dict[str, int] = {ctx.bot_id: 0 for ctx in bot_contexts}
+
+    while True:
+        try:
+            await asyncio.sleep(interval_sec)
+            for ctx in bot_contexts:
+                client = ctx.client
+                is_conn = getattr(client, "is_connected", False)
+                if not is_conn:
+                    ctx.is_online = False
+                    attempt = bot_attempts.get(ctx.bot_id, 0)
+                    delay = backoff_delays[min(attempt, len(backoff_delays) - 1)]
+                    logger.warning(
+                        f"[WATCHDOG] Bot {ctx.bot_name} session disconnected (attempt {attempt + 1}). "
+                        f"Attempting automatic reconnect in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                    try:
+                        ok = await start_single_bot(ctx)
+                        if ok:
+                            bot_attempts[ctx.bot_id] = 0
+                            logger.info(f"[WATCHDOG] Bot {ctx.bot_name} reconnected and restored ONLINE successfully.")
+                        else:
+                            bot_attempts[ctx.bot_id] = attempt + 1
+                    except Exception as rec_err:
+                        bot_attempts[ctx.bot_id] = attempt + 1
+                        logger.error(f"[WATCHDOG] Failed to reconnect {ctx.bot_name}: {rec_err}")
+                else:
+                    bot_attempts[ctx.bot_id] = 0
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug(f"[WATCHDOG] Loop exception: {e}")
 
 
 def start_health_server(port: Optional[int] = None):
@@ -4910,18 +5097,45 @@ async def start_all_bots(configs: Optional[List[Dict[str, Any]]] = None):
     if recovered > 0:
         print(f"♻️ Successfully recovered and resumed {recovered} job(s) from previous session!")
 
+    # 9. Send official Online & Ready announcement if BOT_STATUS_CHAT_ID is configured
+    if BOT_STATUS_CHAT_ID:
+        primary_ctx = online_contexts[0]
+        try:
+            target_chat = int(BOT_STATUS_CHAT_ID) if BOT_STATUS_CHAT_ID.lstrip("-").isdigit() else BOT_STATUS_CHAT_ID
+            note_text, note_markup = format_bot_online_card(
+                bot_name=primary_ctx.bot_display_name,
+                bot_username=primary_ctx.bot_username,
+                active_bots=len(online_contexts),
+                total_bots=len(bot_contexts),
+                recovered_jobs=recovered
+            )
+            await primary_ctx.client.send_message(
+                chat_id=target_chat,
+                text=note_text,
+                reply_markup=note_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            logger.info(f"[STARTUP NOTIFY] Sent startup online card to status chat {BOT_STATUS_CHAT_ID}")
+        except Exception as notify_err:
+            logger.warning(f"[STARTUP NOTIFY] Could not send startup notification to {BOT_STATUS_CHAT_ID}: {notify_err}")
+
+    # 10. Start background health watchdog
+    watchdog_task = asyncio.create_task(bot_health_watchdog(bot_contexts))
+
     print("=" * 60)
     print(f"✅ COURSE WALLAH IS ONLINE AND READY ({len(online_contexts)}/{len(bot_contexts)} bots active)", flush=True)
     print("=" * 60, flush=True)
     logger.info(f"✅ COURSE WALLAH IS ONLINE AND READY ({len(online_contexts)}/{len(bot_contexts)} bots active)")
 
-    # 9. Idle until shutdown signal
+    # 11. Idle until shutdown signal
     try:
         await idle()
     finally:
         print("\n" + "=" * 60)
         print("🛑 Shutting down bot clients...")
         print("=" * 60)
+        if watchdog_task and not watchdog_task.done():
+            watchdog_task.cancel()
         for ctx in online_contexts:
             print(f"Stopping {ctx.bot_name}...")
             logger.info(f"Stopping {ctx.bot_name} cleanly...")

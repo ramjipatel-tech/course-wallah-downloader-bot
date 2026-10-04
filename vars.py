@@ -191,6 +191,7 @@ FORUM_CHAT_ID = os.environ.get("FORUM_CHAT_ID", "")
 RECORDED_TOPIC_ID = int(os.environ.get("RECORDED_TOPIC_ID", "0")) if os.environ.get("RECORDED_TOPIC_ID", "0").isdigit() else None
 LIVE_TOPIC_ID = int(os.environ.get("LIVE_TOPIC_ID", "0")) if os.environ.get("LIVE_TOPIC_ID", "0").isdigit() else None
 PREMIUM_CHANNEL = os.environ.get("PREMIUM_CHANNEL", "")
+BOT_STATUS_CHAT_ID = os.environ.get("BOT_STATUS_CHAT_ID", "").strip().strip("'\"")
 
 # ==============================================================================
 # 🔧 TOOLS & BINARIES

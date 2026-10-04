@@ -728,12 +728,18 @@ def extract_remote_media_segment(
     """
     Extracts a time-aligned segment from remote video and audio streams using FFmpeg stream copy.
     - Slices matching exact time ranges (-ss start_sec -t dur_sec) for both video and audio.
+    - Explicitly supplies container format (-f matroska or -f mp4) to ensure FFmpeg never fails on temporary file paths.
     - Preserves container validity and faststart if mp4.
     """
     if not video_url or not output_path:
         return False
 
-    temp_path = f"{output_path}.seg.tmp"
+    ext = os.path.splitext(output_path)[1].lower()
+    is_mkv = ext in [".mkv", ".webm"]
+    fmt = "matroska" if is_mkv else "mp4"
+    valid_ext = ".mkv" if is_mkv else ".mp4"
+    temp_path = f"{output_path}.seg.tmp{valid_ext}"
+
     if os.path.exists(temp_path):
         try:
             os.remove(temp_path)
@@ -753,9 +759,10 @@ def extract_remote_media_segment(
             "-t", f"{dur_sec:.3f}",
             "-c:v", "copy",
             "-c:a", "copy",
-            "-avoid_negative_ts", "make_zero"
+            "-avoid_negative_ts", "make_zero",
+            "-f", fmt
         ]
-        if output_path.endswith(".mp4"):
+        if fmt == "mp4":
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(temp_path))
     else:
@@ -766,9 +773,10 @@ def extract_remote_media_segment(
             "-i", str(video_url),
             "-t", f"{dur_sec:.3f}",
             "-c", "copy",
-            "-avoid_negative_ts", "make_zero"
+            "-avoid_negative_ts", "make_zero",
+            "-f", fmt
         ]
-        if output_path.endswith(".mp4"):
+        if fmt == "mp4":
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(temp_path))
 
@@ -824,7 +832,11 @@ def download_media_stream_url(
     if not stream_url or not output_path:
         return False
 
-    temp_dest = f"{output_path}.dl.tmp"
+    ext = os.path.splitext(output_path)[1].lower()
+    is_mkv = ext in [".mkv", ".webm"]
+    fmt = "matroska" if is_mkv else "mp4"
+    valid_ext = ".mkv" if is_mkv else ".mp4"
+    temp_dest = f"{output_path}.dl.tmp{valid_ext}"
     ffmpeg_bin = FFMPEG_PATH or "ffmpeg"
 
     # Case 1: Separate video + audio streams -> direct FFmpeg remux
@@ -837,9 +849,12 @@ def download_media_stream_url(
                 "-c:v", "copy",
                 "-c:a", "copy",
                 "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
-                str(temp_dest)
+                "-f", fmt
             ]
+            if fmt == "mp4":
+                cmd.extend(["-movflags", "+faststart"])
+            cmd.append(str(temp_dest))
+
             res = subprocess.run(cmd, check=False)
             if res.returncode == 0 and os.path.exists(temp_dest) and os.path.getsize(temp_dest) > 0:
                 if os.path.exists(output_path):
@@ -859,9 +874,12 @@ def download_media_stream_url(
             "-i", str(stream_url),
             "-c", "copy",
             "-avoid_negative_ts", "make_zero",
-            "-movflags", "+faststart",
-            str(temp_dest)
+            "-f", fmt
         ]
+        if fmt == "mp4":
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(temp_dest))
+
         res = subprocess.run(cmd, check=False)
         if res.returncode == 0 and os.path.exists(temp_dest) and os.path.getsize(temp_dest) > 0:
             if os.path.exists(output_path):
@@ -893,9 +911,12 @@ def download_media_stream_url(
             ffmpeg_bin, "-y", "-loglevel", "error",
             "-i", str(temp_dest),
             "-c", "copy",
-            "-movflags", "+faststart",
-            str(output_path)
+            "-f", fmt
         ]
+        if fmt == "mp4":
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(output_path))
+
         res = subprocess.run(cmd, check=False)
         if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             try:

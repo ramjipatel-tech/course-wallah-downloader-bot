@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, Union, List, Tuple, Set
 import shutil
 import logging
 import tempfile
+import requests
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, MessageNotModified
 from vars import CREDIT, PROJECT_ROOT, DATA_DIR, TEMP_DIR, DOWNLOADS_DIR
@@ -1155,6 +1156,179 @@ def format_youtube_fallback_card(
 
     return text, InlineKeyboardMarkup(buttons)
 
+
+def format_universal_input_card(
+    action_title: str,
+    instruction: str,
+    example: Optional[str] = None,
+    cancel_callback: Optional[str] = None,
+    user_id: Optional[int] = None
+) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+    """
+    Constructs a universal, clean, premium input prompt card with action title,
+    expected input format, safe example, and cancel action.
+    """
+    clean_title = (action_title or "INPUT").upper()
+    lines = [
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
+        f"│ 🎓 <b>COURSE WALLAH</b>      │",
+        f"│     <b>{clean_title}</b>",
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n",
+        f"📝 <b>{instruction}</b>"
+    ]
+    if example:
+        lines.append(f"\n━━━━━━━━━━━━━━━━━━━━━━\n💡 <b>Example:</b> <code>{example}</code>")
+
+    buttons = None
+    if cancel_callback:
+        cb = cancel_callback if user_id is None else f"{cancel_callback}:{user_id}"
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data=cb)]
+        ])
+
+    return "\n".join(lines), buttons
+
+
+def format_drm_input_card(user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Constructs clean, professional prompt card for /drm command.
+    """
+    text = (
+        "╭────────────────────────╮\n"
+        "│ 🔐 <b>DRM CHECKER & BATCH</b> │\n"
+        "╰────────────────────────╯\n\n"
+        "📝 <b>Send the media URL you want to check</b>\n"
+        "<i>or send a <code>.txt</code> file containing course links.</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ <i>Only send authorized media or course links.</i>\n"
+        "💡 <b>Example:</b> <code>https://...</code> or upload <code>links.txt</code>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"input_cancel:{user_id}")]
+    ])
+    return text, buttons
+
+
+def format_drm_result_card(
+    title: str,
+    is_drm: bool,
+    media_type: str = "Stream",
+    details: Optional[str] = None
+) -> str:
+    """
+    Constructs clean DRM check result card without exposing secrets/headers/keys.
+    """
+    clean_title = (title or "Media Stream")[:60]
+    drm_status = "🔴 <b>DRM Protected</b> (Encrypted / Widevine / PlayReady)" if is_drm else "🟢 <b>No DRM Detected</b> (Directly Playable & Downloadable)"
+    lines = [
+        "╭────────────────────────╮",
+        "│ 🔐 <b>DRM CHECK RESULT</b>    │",
+        "╰────────────────────────╯\n",
+        f"🎬 <b>Media:</b> <code>{clean_title}</code>",
+        f"📦 <b>Type:</b> <code>{media_type}</code>",
+        f"🛡️ <b>DRM Status:</b> {drm_status}"
+    ]
+    if details:
+        lines.append(f"ℹ️ <b>Details:</b> <i>{details}</i>")
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("⚡ <i>Powered by Course Wallah</i>")
+    return "\n".join(lines)
+
+
+def check_media_drm_status(url: str) -> Dict[str, Any]:
+    """
+    Safely probes media URL for DRM encryption without exposing tokens/keys/headers.
+    """
+    clean_title = MediaRouter.extract_clean_title(url, "Media Stream")
+    m_type = MediaRouter.classify_url(url)
+    
+    is_drm = False
+    details = "Clean playable media stream."
+    type_lbl = m_type.value.upper()
+    
+    # Check for DASH/MPD or Widevine
+    url_lower = url.lower()
+    if ".mpd" in url_lower or "mpd" in url_lower:
+        type_lbl = "MPEG-DASH / MPD"
+        try:
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if "ContentProtection" in r.text or "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" in r.text or "cenc" in r.text:
+                is_drm = True
+                details = "Widevine / Common Encryption (CENC) DRM detected."
+            else:
+                details = "Clear/unencrypted DASH manifest."
+        except Exception:
+            details = "DASH manifest (status unverified)."
+    elif ".m3u8" in url_lower or "m3u8" in url_lower:
+        type_lbl = "HLS / M3U8"
+        try:
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if "#EXT-X-KEY:METHOD=SAMPLE-AES" in r.text or "SAMPLE-AES-CTR" in r.text:
+                is_drm = True
+                details = "FairPlay / Sample-AES DRM detected."
+            elif "#EXT-X-KEY:METHOD=AES-128" in r.text:
+                details = "AES-128 HLS standard encrypted (Supported via Course Wallah)."
+            else:
+                details = "Clear HLS stream."
+        except Exception:
+            details = "HLS playlist."
+    elif "youtube" in url_lower or "youtu.be" in url_lower:
+        type_lbl = "YouTube Video"
+        details = "YouTube stream (Supported via YTUltra 4K pipeline)."
+    else:
+        type_lbl = f"Direct {m_type.value.title()}"
+        details = "Standard media URL."
+
+    return {
+        "title": clean_title,
+        "is_drm": is_drm,
+        "type": type_lbl,
+        "details": details
+    }
+
+
+def format_bot_online_card(
+    bot_name: str,
+    bot_username: str = "",
+    active_bots: int = 1,
+    total_bots: int = 1,
+    recovered_jobs: int = 0
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds the official startup & online status announcement card for Telegram.
+    """
+    uname_str = f"@{bot_username}" if bot_username else bot_name
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    
+    rec_line = f"♻️ <b>Recovery scan completed:</b> {recovered_jobs} job(s) restored\n" if recovered_jobs > 0 else "♻️ <b>Recovery scan completed:</b> No unfinished jobs found\n"
+
+    text = (
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "│ 🎓 <b>COURSE WALLAH</b>      │\n"
+        "│      <b>BOT ONLINE</b>       │\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "🟢 <b>Bot is now ONLINE & LIVE</b>\n\n"
+        "⚡ <b>Downloader:</b> READY\n"
+        "🎬 <b>YouTube:</b> READY\n"
+        "🔥 <b>4K Remote Pipeline:</b> READY\n"
+        "📺 <b>Quality Selector:</b> READY\n"
+        "📤 <b>Telegram Upload:</b> READY\n"
+        "🔄 <b>Auto Recovery:</b> ENABLED\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🤖 <b>{bot_name}</b> (<code>{uname_str}</code>)\n"
+        f"🟢 <b>Status:</b> ONLINE ({active_bots}/{total_bots} active)\n"
+        f"🕐 <b>Time:</b> <code>{now_str}</code>\n\n"
+        f"{rec_line}\n"
+        "🚀 <b>Course Wallah is ready!</b>\n"
+        "Use /start to begin."
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Start", callback_data="help_menu"),
+            InlineKeyboardButton("❓ Help", callback_data="help_menu")
+        ]
+    ])
+    return text, buttons
 
 
 # ==============================================================================
