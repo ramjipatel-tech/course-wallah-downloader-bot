@@ -56,13 +56,32 @@ pdf_test_downloads/
 *.aria2
 *.tmp*
 *.tmp
+*.seg.tmp
 test_*.png
+test_*.jpg
+test_*.jpeg
 test_*.mp4
+test_*.mkv
+test_*.webm
+test_*.m3u8
+
+# Test Reports & Coverage
+reports/
+test_reports/
+*.report.json
+*.report.md
+*.report.html
+coverage/
+.coverage
+.coverage.*
+htmlcov/
 
 # Logs
 logs/
 *.log
+*.log.*
 logs.txt
+ffmpeg*.log
 
 # Python & Virtual Environments
 __pycache__/
@@ -90,3 +109,8 @@ Thumbs.db
 .idea/
 .vscode/
 node_modules/
+*.bak
+*.swp
+*.swo
+*~
+
