@@ -37,7 +37,7 @@ import requests
 import yt_dlp
 import tgcrypto
 from pyrogram import Client, filters, idle, enums
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler, EditedMessageHandler
 from pyrogram.types import (
     Message,
     CallbackQuery,
@@ -133,6 +133,8 @@ from utils import (
     format_pdf_processing_card,
     format_pdf_upload_card,
     format_success_card,
+    format_youtube_quality_menu,
+    format_youtube_fallback_card,
     get_disk_storage_info,
     cleanup_uploaded_file,
     cleanup_job_temp_dir,
@@ -144,6 +146,14 @@ from utils import (
 from job_manager import job_manager, JobManager, JobCheckpoint
 import auth
 import itsgolu as helper
+from youtube_fallback import (
+    fetch_ytultra_media_data,
+    parse_all_ytultra_qualities,
+    parse_ytultra_response,
+    parse_quality_number,
+    resolve_youtube_ytultra_info
+)
+
 from academic_parser import (
     parse_academic_txt,
     parse_course_txt,
@@ -582,14 +592,50 @@ async def help_cmd(client: Client, message: Message):
 
 
 async def id_cmd(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else "N/A"
-    chat_id = message.chat.id if message.chat else "N/A"
+    if not message or not message.chat:
+        return
+
+    chat = message.chat
+    chat_id = chat.id
+    raw_type = getattr(chat.type, "value", str(chat.type)) if hasattr(chat.type, "value") else str(chat.type)
+    chat_type = raw_type.lower().replace("chattype.", "")
+
+    lines = [
+        f"<b>🆔 Chat ID:</b> <code>{chat_id}</code>",
+        f"<b>📌 Type:</b> <code>{chat_type}</code>"
+    ]
+
+    if chat.title:
+        lines.append(f"<b>📚 Title:</b> {chat.title}")
+    elif chat.first_name:
+        name_parts = [chat.first_name]
+        if chat.last_name:
+            name_parts.append(chat.last_name)
+        lines.append(f"<b>👤 Name:</b> {' '.join(name_parts)}")
+
+    if chat.username:
+        lines.append(f"<b>🔗 Username:</b> @{chat.username}")
+
+    if message.from_user and chat_type != "private":
+        lines.append(f"<b>👤 User ID:</b> <code>{message.from_user.id}</code>")
+
     thread_id = getattr(message, "message_thread_id", None)
-    thread_info = f"\n<b>Topic / Thread ID:</b> <code>{thread_id}</code>" if thread_id else ""
-    await message.reply_text(
-        f"<b>👤 Telegram ID:</b> <code>{user_id}</code>\n"
-        f"<b>💬 Chat ID:</b> <code>{chat_id}</code>{thread_info}"
-    )
+    if thread_id and chat_type in ["supergroup", "group"]:
+        lines.append(f"<b>🧵 Topic / Thread ID:</b> <code>{thread_id}</code>")
+
+    reply_text = "\n".join(lines)
+
+    reply_kwargs = {}
+    if thread_id and chat_type in ["supergroup", "group"]:
+        try:
+            reply_kwargs["message_thread_id"] = int(thread_id)
+        except (ValueError, TypeError):
+            pass
+
+    try:
+        await message.reply_text(reply_text, parse_mode=enums.ParseMode.HTML, **reply_kwargs)
+    except Exception as exc:
+        logger.warning(f"Failed to reply to /id command: {exc}")
 
 
 # ==============================================================================
@@ -1586,6 +1632,14 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
             v_error = None
             pdf_error = None
 
+            def _on_part_done(part_idx, item_idx=i+1):
+                key = str(item_idx)
+                if key not in job.uploaded_parts:
+                    job.uploaded_parts[key] = []
+                if part_idx not in job.uploaded_parts[key]:
+                    job.uploaded_parts[key].append(part_idx)
+                db.save_job(job.to_dict())
+
             # --- A. AppX / ClassX / Lecture API Source URL (Video + PDF Unified) ---
             if media_type == MediaType.APPX_LECTURE:
                 target_q = quality if quality in ["144p", "240p", "360p", "480p", "720p", "1080p"] else None
@@ -1691,7 +1745,11 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                                 channel_id,
                                 watermark=watermark,
                                 topic_thread_id=active_thread_id,
-                                parse_mode=enums.ParseMode.HTML
+                                parse_mode=enums.ParseMode.HTML,
+                                user_id=user_id,
+                                bot_id=eff_bot_id,
+                                uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                                on_part_uploaded=_on_part_done
                             )
                         print(f"[APPX {job_id}] UPLOAD SUCCESS")
                         logging.info(f"[APPX {job_id}] UPLOAD SUCCESS")
@@ -1837,7 +1895,9 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                         topic_thread_id=active_thread_id,
                         parse_mode=enums.ParseMode.HTML,
                         user_id=user_id,
-                        bot_id=b_ctx.bot_id if b_ctx else getattr(job, 'bot_id', 'bot_1')
+                        bot_id=eff_bot_id,
+                        uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                        on_part_uploaded=_on_part_done
                     )
                 v_status = "SUCCESS"
 
@@ -1911,7 +1971,11 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                         channel_id,
                         watermark=watermark,
                         topic_thread_id=active_thread_id,
-                        parse_mode=enums.ParseMode.HTML
+                        parse_mode=enums.ParseMode.HTML,
+                        user_id=user_id,
+                        bot_id=eff_bot_id,
+                        uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                        on_part_uploaded=_on_part_done
                     )
                 v_status = "SUCCESS"
 
@@ -1974,29 +2038,6 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                     except Exception:
                         pass
 
-                yt_file = await helper.download_video(url, name_clean, quality, user_id=user_id, custom_dir=downloads_dir)
-                if not yt_file or not os.path.exists(yt_file) or os.path.getsize(yt_file) == 0:
-                    raise RuntimeError("YouTube download produced empty or missing file.")
-                temp_files_to_clean.append(yt_file)
-
-                job.phase = "PROCESSING"
-                db.save_job(job.to_dict())
-                final_yt = yt_file
-                if active_wm and WATERMARK_TEXT:
-                    if prog_msg:
-                        try:
-                            await prog_msg.edit_text(format_watermark_card(item.title, frame=0), parse_mode=enums.ParseMode.HTML)
-                        except Exception:
-                            pass
-                    wm_res = await asyncio.to_thread(helper.apply_video_watermark, yt_file, active_wm, WATERMARK_FILE)
-                    if wm_res and os.path.exists(wm_res):
-                        temp_files_to_clean.append(wm_res)
-                        final_yt = wm_res
-
-                yt_thumb = await asyncio.to_thread(helper.extract_or_download_thumbnail, final_yt, None, thumb)
-                if yt_thumb and os.path.exists(yt_thumb):
-                    temp_files_to_clean.append(yt_thumb)
-
                 caption_text = build_enriched_caption(
                     course_data.subject,
                     b_name,
@@ -2005,23 +2046,84 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                     credit=credit
                 )
 
-                job.phase = "UPLOADING"
-                db.save_job(job.to_dict())
-                async with manager.upload_semaphore:
-                    await helper.send_vid(
-                        bot_client,
-                        prog_msg,
-                        caption_text,
-                        final_yt,
-                        yt_thumb,
-                        item.title,
-                        prog_msg,
-                        channel_id,
-                        watermark=watermark,
-                        topic_thread_id=active_thread_id,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                v_status = "SUCCESS"
+                yt_info = await asyncio.to_thread(helper.resolve_youtube_ytultra_info, url, quality)
+                yt_uploaded_msg = None
+
+                if yt_info and yt_info.get("url"):
+                    job.phase = "UPLOADING"
+                    db.save_job(job.to_dict())
+                    try:
+                        async with manager.upload_semaphore:
+                            yt_uploaded_msg = await helper.process_and_upload_remote_youtube_parts(
+                                bot_client,
+                                prog_msg,
+                                caption_text,
+                                item.title,
+                                url,
+                                yt_info,
+                                channel_id,
+                                user_id=user_id,
+                                quality=quality,
+                                custom_dir=downloads_dir,
+                                thumbnail=thumb,
+                                watermark=watermark,
+                                topic_thread_id=active_thread_id,
+                                parse_mode=enums.ParseMode.HTML,
+                                uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                                on_part_uploaded=_on_part_done
+                            )
+                    except Exception as exc:
+                        logger.warning(f"[YOUTUBE] Remote part-by-part processing failed: {exc}")
+                        if "insufficient for the requested ~1800 MB part architecture" in str(exc):
+                            raise
+
+                if yt_uploaded_msg:
+                    v_status = "SUCCESS"
+                else:
+                    yt_file = await helper.download_video(url, name_clean, quality, user_id=user_id, custom_dir=downloads_dir)
+                    if not yt_file or not os.path.exists(yt_file) or os.path.getsize(yt_file) == 0:
+                        raise RuntimeError("YouTube download produced empty or missing file.")
+                    temp_files_to_clean.append(yt_file)
+
+                    job.phase = "PROCESSING"
+                    db.save_job(job.to_dict())
+                    final_yt = yt_file
+                    if active_wm and WATERMARK_TEXT:
+                        if prog_msg:
+                            try:
+                                await prog_msg.edit_text(format_watermark_card(item.title, frame=0), parse_mode=enums.ParseMode.HTML)
+                            except Exception:
+                                pass
+                        wm_res = await asyncio.to_thread(helper.apply_video_watermark, yt_file, active_wm, WATERMARK_FILE)
+                        if wm_res and os.path.exists(wm_res):
+                            temp_files_to_clean.append(wm_res)
+                            final_yt = wm_res
+
+                    yt_thumb = await asyncio.to_thread(helper.extract_or_download_thumbnail, final_yt, None, thumb)
+                    if yt_thumb and os.path.exists(yt_thumb):
+                        temp_files_to_clean.append(yt_thumb)
+
+                    job.phase = "UPLOADING"
+                    db.save_job(job.to_dict())
+                    async with manager.upload_semaphore:
+                        await helper.send_vid(
+                            bot_client,
+                            prog_msg,
+                            caption_text,
+                            final_yt,
+                            yt_thumb,
+                            item.title,
+                            prog_msg,
+                            channel_id,
+                            watermark=watermark,
+                            topic_thread_id=active_thread_id,
+                            parse_mode=enums.ParseMode.HTML,
+                            user_id=user_id,
+                            bot_id=eff_bot_id,
+                            uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                            on_part_uploaded=_on_part_done
+                        )
+                    v_status = "SUCCESS"
 
             # --- E. Encrypted / AES Protected Video ---
             elif media_type == MediaType.ENCRYPTED_STREAM:
@@ -2084,12 +2186,16 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                         channel_id,
                         watermark=watermark,
                         topic_thread_id=active_thread_id,
-                        parse_mode=enums.ParseMode.HTML
+                        parse_mode=enums.ParseMode.HTML,
+                        user_id=user_id,
+                        bot_id=eff_bot_id,
+                        uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                        on_part_uploaded=_on_part_done
                     )
                 v_status = "SUCCESS"
 
-            # --- F. Spayee Specialized HLS Stream ---
-            elif media_type == MediaType.SPAYEE_HLS:
+            # --- F. Spayee / Go Classes Specialized HLS Stream ---
+            elif media_type in (MediaType.SPAYEE_HLS, MediaType.GO_CLASSES):
                 if manager.cancel_flags.get(job_id, False):
                     break
 
@@ -2164,7 +2270,11 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                         channel_id,
                         watermark=watermark,
                         topic_thread_id=active_thread_id,
-                        parse_mode=enums.ParseMode.HTML
+                        parse_mode=enums.ParseMode.HTML,
+                        user_id=user_id,
+                        bot_id=eff_bot_id,
+                        uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                        on_part_uploaded=_on_part_done
                     )
                 v_status = "SUCCESS"
 
@@ -2219,7 +2329,7 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                 v_status = "SUCCESS"
 
             # --- H. Generic Direct Video URL (.mp4, .mkv, .webm, etc.) ---
-            else:
+            elif media_type == MediaType.DIRECT_VIDEO:
                 job.phase = "DOWNLOADING"
                 db.save_job(job.to_dict())
                 if prog_msg:
@@ -2275,9 +2385,15 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
                         topic_thread_id=active_thread_id,
                         parse_mode=enums.ParseMode.HTML,
                         user_id=user_id,
-                        bot_id=eff_bot_id
+                        bot_id=eff_bot_id,
+                        uploaded_parts=job.uploaded_parts.get(str(i + 1), []),
+                        on_part_uploaded=_on_part_done
                     )
                 v_status = "SUCCESS"
+
+            # --- I. Unsupported / Unknown URL ---
+            else:
+                raise RuntimeError("Unsupported video source: The provided link could not be identified as a supported source.")
 
             if prog_msg:
                 try:
@@ -2337,7 +2453,7 @@ async def execute_job_pipeline(job: JobCheckpoint, bot_client: Client, manager):
             if media_type == MediaType.DIRECT_PDF:
                 err_v_status = "NOT_AVAILABLE"
                 err_pdf_status = "FAILED"
-            elif media_type in (MediaType.KGS_HLS, MediaType.DIRECT_M3U8, MediaType.YOUTUBE, MediaType.ENCRYPTED_STREAM, MediaType.SPAYEE_HLS, MediaType.DIRECT_VIDEO, MediaType.DIRECT_IMAGE):
+            elif media_type in (MediaType.KGS_HLS, MediaType.DIRECT_M3U8, MediaType.YOUTUBE, MediaType.ENCRYPTED_STREAM, MediaType.SPAYEE_HLS, MediaType.GO_CLASSES, MediaType.DIRECT_VIDEO, MediaType.DIRECT_IMAGE):
                 err_v_status = "FAILED"
                 err_pdf_status = "NOT_AVAILABLE"
             else:
@@ -3226,6 +3342,134 @@ async def retry_failed_callback(client: Client, query: CallbackQuery):
 # 🎯 DIRECT LINK & DOCUMENT INPUT HANDLERS
 # ==============================================================================
 
+_PENDING_YT_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+async def _execute_youtube_download(
+    client: Client,
+    job_id: str,
+    user_id: int,
+    url: str,
+    title: str,
+    quality: str,
+    media_data: Optional[Dict[str, Any]],
+    status_msg: Message,
+    chat_id: Union[int, str],
+    topic_thread_id: Optional[int] = None,
+    credit: str = CREDIT
+):
+    """
+    Executes YouTube video download and upload with the selected quality.
+    """
+    temp_files = []
+    job_temp = os.path.join(TEMP_DIR, str(user_id), job_id)
+    os.makedirs(job_temp, exist_ok=True)
+    clean_title = helper.safe_filename(title) or f"YouTube_Lecture_{int(time.time())}"
+    caption = (
+        f"🎬 <b>Title:</b> {clean_title}\n"
+        f"📺 <b>Quality:</b> {quality}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <b>Downloaded via:</b> {credit}"
+    )
+
+    try:
+        await status_msg.edit_text(
+            format_download_card("Course Wallah", clean_title, frame=0),
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+    target_height = parse_quality_number(quality)
+    yt_info = None
+    if media_data and media_data.get("raw_data"):
+        yt_info = parse_ytultra_response(media_data["raw_data"], target_height=target_height)
+
+    if not yt_info or not yt_info.get("url"):
+        yt_info = await asyncio.to_thread(resolve_youtube_ytultra_info, url, quality)
+
+    yt_done = False
+    if yt_info and yt_info.get("url"):
+        try:
+            res_msg = await helper.process_and_upload_remote_youtube_parts(
+                client,
+                status_msg,
+                caption,
+                clean_title,
+                url,
+                yt_info,
+                chat_id,
+                user_id=user_id,
+                quality=quality,
+                custom_dir=job_temp,
+                thumbnail=None,
+                watermark=WATERMARK_TEXT if WATERMARK_TEXT not in ("/d", "no", "none", "") else None,
+                topic_thread_id=topic_thread_id,
+                parse_mode=enums.ParseMode.HTML
+            )
+            if res_msg:
+                yt_done = True
+        except Exception as exc:
+            logger.warning(f"[YOUTUBE] Remote part processing failed: {exc}")
+            if "insufficient for the requested ~1800 MB part architecture" in str(exc):
+                try:
+                    await status_msg.edit_text(
+                        "⚠️ <b>Temporary storage is insufficient for this video. The download was stopped safely.</b>",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                return
+
+    if not yt_done:
+        yt_file = await helper.download_video(url, clean_title, quality, user_id=user_id, custom_dir=job_temp)
+        if not yt_file or not os.path.exists(yt_file) or os.path.getsize(yt_file) == 0:
+            raise RuntimeError("YouTube download produced empty or missing file.")
+        temp_files.append(yt_file)
+
+        final_v_file = yt_file
+        if WATERMARK_TEXT and WATERMARK_TEXT not in ("/d", "no", "none", ""):
+            try:
+                await status_msg.edit_text(format_watermark_card(clean_title, frame=0), parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+            wm_res = await asyncio.to_thread(helper.apply_video_watermark, yt_file, WATERMARK_TEXT, WATERMARK_FILE)
+            if wm_res and os.path.exists(wm_res):
+                temp_files.append(wm_res)
+                final_v_file = wm_res
+
+        v_thumb = await asyncio.to_thread(helper.extract_or_download_thumbnail, final_v_file, None, None)
+        if v_thumb and os.path.exists(v_thumb):
+            temp_files.append(v_thumb)
+
+        try:
+            await status_msg.edit_text(format_upload_card(clean_title, frame=0), parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+
+        await helper.send_vid(
+            client,
+            status_msg,
+            caption,
+            final_v_file,
+            v_thumb,
+            clean_title,
+            status_msg,
+            chat_id,
+            topic_thread_id=topic_thread_id,
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    finally:
+        for tf in temp_files:
+            cleanup_uploaded_file(tf)
+        cleanup_job_temp_dir(job_temp)
+
+
 async def _run_direct_link_job(
     job_id: str,
     client: Client,
@@ -3246,59 +3490,103 @@ async def _run_direct_link_job(
     try:
         # --- 1. YouTube Pipeline ---
         if media_type == MediaType.YOUTUBE:
-            title = helper.safe_filename(text.split("\n")[0].replace(url, "").strip()) or f"YouTube_Lecture_{int(time.time())}"
+            raw_title = text.split("\n")[0].replace(url, "").strip()
+            title = helper.safe_filename(raw_title) or f"YouTube_Lecture_{int(time.time())}"
+
             try:
                 await status_msg.edit_text(format_download_card("Course Wallah", title, frame=0), parse_mode=enums.ParseMode.HTML)
             except Exception:
                 pass
 
-            yt_file = await helper.download_video(url, title, "720p", user_id=user_id, custom_dir=job_temp)
-            if not yt_file or not os.path.exists(yt_file) or os.path.getsize(yt_file) == 0:
-                raise RuntimeError("YouTube download produced empty or missing file.")
-            temp_files.append(yt_file)
+            # Query all available formats from YTUltra
+            media_data = await asyncio.to_thread(fetch_ytultra_media_data, url)
+            qualities = media_data.get("qualities", []) if media_data else []
 
-            final_v_file = yt_file
-            if WATERMARK_TEXT and WATERMARK_TEXT not in ("/d", "no", "none", ""):
-                try:
-                    await status_msg.edit_text(format_watermark_card(title, frame=0), parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    pass
-                wm_res = await asyncio.to_thread(helper.apply_video_watermark, yt_file, WATERMARK_TEXT, WATERMARK_FILE)
-                if wm_res and os.path.exists(wm_res):
-                    temp_files.append(wm_res)
-                    final_v_file = wm_res
+            if media_data and media_data.get("title") and not raw_title:
+                title = helper.safe_filename(media_data["title"])
 
-            v_thumb = await asyncio.to_thread(helper.extract_or_download_thumbnail, final_v_file, None, None)
-            if v_thumb and os.path.exists(v_thumb):
-                temp_files.append(v_thumb)
+            duration_sec = float(media_data.get("duration") or 0) if media_data else 0.0
 
-            caption = (
-                f"🎬 <b>Title:</b> {title}\n"
-                f"📺 <b>Quality:</b> 720p\n\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🤖 <b>Downloaded via:</b> {CREDIT}"
+            # Check if user has an explicit configured quality
+            configured_q = db.get_user_quality(user_id) if hasattr(db, "get_user_quality") else None
+            if configured_q and configured_q.lower() not in ("auto", "ask", "none", ""):
+                req_h = parse_quality_number(configured_q)
+                has_req = any(q.get("height") == req_h for q in qualities)
+                if has_req:
+                    await _execute_youtube_download(
+                        client=client,
+                        job_id=job_id,
+                        user_id=user_id,
+                        url=url,
+                        title=title,
+                        quality=f"{req_h}p",
+                        media_data=media_data,
+                        status_msg=status_msg,
+                        chat_id=message.chat.id,
+                        topic_thread_id=getattr(message, "message_thread_id", None),
+                        credit=CREDIT
+                    )
+                    return
+                elif qualities:
+                    highest_q = qualities[0]
+                    card_text, markup = format_youtube_fallback_card(
+                        title=title,
+                        duration_sec=duration_sec,
+                        requested_height=req_h,
+                        highest_quality=highest_q,
+                        job_id=job_id,
+                        user_id=user_id
+                    )
+                    _PENDING_YT_JOBS[job_id] = {
+                        "user_id": user_id,
+                        "chat_id": message.chat.id,
+                        "url": url,
+                        "title": title,
+                        "media_data": media_data,
+                        "created_at": time.time(),
+                        "topic_thread_id": getattr(message, "message_thread_id", None)
+                    }
+                    await status_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    return
+
+            # Interactive Selection: If multiple playable qualities exist, show quality menu
+            if len(qualities) > 1:
+                card_text, markup = format_youtube_quality_menu(
+                    title=title,
+                    duration_sec=duration_sec,
+                    qualities=qualities,
+                    job_id=job_id,
+                    user_id=user_id
+                )
+                _PENDING_YT_JOBS[job_id] = {
+                    "user_id": user_id,
+                    "chat_id": message.chat.id,
+                    "url": url,
+                    "title": title,
+                    "media_data": media_data,
+                    "created_at": time.time(),
+                    "topic_thread_id": getattr(message, "message_thread_id", None)
+                }
+                await status_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                return
+
+            # Default / Single Quality Fallback
+            chosen_q = f"{qualities[0]['height']}p" if qualities else "720p"
+            await _execute_youtube_download(
+                client=client,
+                job_id=job_id,
+                user_id=user_id,
+                url=url,
+                title=title,
+                quality=chosen_q,
+                media_data=media_data,
+                status_msg=status_msg,
+                chat_id=message.chat.id,
+                topic_thread_id=getattr(message, "message_thread_id", None),
+                credit=CREDIT
             )
+            return
 
-            try:
-                await status_msg.edit_text(format_upload_card(title, frame=0), parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                pass
-
-            await helper.send_vid(
-                client,
-                status_msg,
-                caption,
-                final_v_file,
-                v_thumb,
-                title,
-                status_msg,
-                message.chat.id,
-                parse_mode=enums.ParseMode.HTML
-            )
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
 
         # --- 2. Direct PDF Pipeline ---
         elif media_type == MediaType.DIRECT_PDF:
@@ -3562,8 +3850,8 @@ async def _run_direct_link_job(
             except Exception:
                 pass
 
-        # --- 5. Spayee Specialized HLS Pipeline ---
-        elif media_type == MediaType.SPAYEE_HLS:
+        # --- 5. Spayee / Go Classes Specialized HLS Pipeline ---
+        elif media_type in (MediaType.SPAYEE_HLS, MediaType.GO_CLASSES):
             key = None
             raw_url = url
             if "*" in raw_url:
@@ -3571,7 +3859,8 @@ async def _run_direct_link_job(
                 raw_url = parts[0].strip()
                 key = parts[1].strip()
 
-            title = MediaRouter.extract_clean_title(raw_url, text.split("\n")[0].replace(url, "").strip()) or f"Spayee_Lecture_{int(time.time())}"
+            stream_label = "Go Classes Stream" if media_type == MediaType.GO_CLASSES else "Spayee HLS Stream"
+            title = MediaRouter.extract_clean_title(raw_url, text.split("\n")[0].replace(url, "").strip()) or f"Lecture_{int(time.time())}"
             name_clean = helper.safe_filename(title)
 
             try:
@@ -3581,7 +3870,7 @@ async def _run_direct_link_job(
 
             v_file = await asyncio.to_thread(helper.download_spayee_hls, raw_url, name_clean, key, "720p", job_temp)
             if not v_file or not os.path.exists(v_file) or os.path.getsize(v_file) == 0:
-                raise RuntimeError("Spayee HLS video download produced empty or missing file.")
+                raise RuntimeError(f"{stream_label} video download produced empty or missing file.")
             temp_files.append(v_file)
 
             final_v_file = v_file
@@ -3601,7 +3890,7 @@ async def _run_direct_link_job(
 
             caption = (
                 f"🎬 <b>Title:</b> {title}\n"
-                f"📺 <b>Type:</b> Spayee HLS Stream\n\n"
+                f"📺 <b>Type:</b> {stream_label}\n\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 <b>Downloaded via:</b> {CREDIT}"
             )
@@ -3620,7 +3909,9 @@ async def _run_direct_link_job(
                 title,
                 status_msg,
                 message.chat.id,
-                parse_mode=enums.ParseMode.HTML
+                parse_mode=enums.ParseMode.HTML,
+                user_id=user_id,
+                bot_id=bot_ctx.bot_id if bot_ctx else "bot_1"
             )
             try:
                 await status_msg.delete()
@@ -4062,6 +4353,122 @@ async def back_to_start_callback(client: Client, query: CallbackQuery):
     await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
+async def youtube_quality_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user tapping a specific quality button (e.g. ytq:job123:2160:user456).
+    """
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) < 4:
+        await query.answer("⚠️ Invalid quality selection.", show_alert=True)
+        return
+
+    job_id = parts[1]
+    try:
+        height = int(parts[2])
+        expected_user = int(parts[3])
+    except (ValueError, TypeError):
+        await query.answer("⚠️ Invalid callback parameters.", show_alert=True)
+        return
+
+    if query.from_user and query.from_user.id != expected_user:
+        await query.answer("⚠️ This download menu belongs to another user.", show_alert=True)
+        return
+
+    await query.answer(f"Selected {height}p quality")
+
+    pending = _PENDING_YT_JOBS.pop(job_id, None)
+    if not pending:
+        await query.message.edit_text("❌ <i>This download request has expired or was already processed.</i>", parse_mode=enums.ParseMode.HTML)
+        return
+
+    asyncio.create_task(
+        _execute_youtube_download(
+            client=client,
+            job_id=job_id,
+            user_id=expected_user,
+            url=pending["url"],
+            title=pending["title"],
+            quality=f"{height}p",
+            media_data=pending.get("media_data"),
+            status_msg=query.message,
+            chat_id=pending["chat_id"],
+            topic_thread_id=pending.get("topic_thread_id"),
+            credit=pending.get("credit", CREDIT)
+        )
+    )
+
+
+async def youtube_menu_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user clicking 'Choose Quality' button to view full quality selection menu.
+    """
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) < 3:
+        await query.answer("⚠️ Invalid action.", show_alert=True)
+        return
+
+    job_id = parts[1]
+    try:
+        expected_user = int(parts[2])
+    except (ValueError, TypeError):
+        await query.answer("⚠️ Invalid callback parameters.", show_alert=True)
+        return
+
+    if query.from_user and query.from_user.id != expected_user:
+        await query.answer("⚠️ This download menu belongs to another user.", show_alert=True)
+        return
+
+    await query.answer()
+    pending = _PENDING_YT_JOBS.get(job_id)
+    if not pending or not pending.get("media_data"):
+        await query.message.edit_text("❌ <i>This download request has expired.</i>", parse_mode=enums.ParseMode.HTML)
+        return
+
+    media_data = pending["media_data"]
+    qualities = media_data.get("qualities", [])
+    if not qualities:
+        await query.message.edit_text("❌ <i>No playable video qualities available for this URL.</i>", parse_mode=enums.ParseMode.HTML)
+        return
+
+    text, markup = format_youtube_quality_menu(
+        title=pending["title"],
+        duration_sec=float(media_data.get("duration") or 0),
+        qualities=qualities,
+        job_id=job_id,
+        user_id=expected_user
+    )
+    await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+
+async def youtube_cancel_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user cancelling the YouTube download.
+    """
+    data = query.data or ""
+    parts = data.split(":")
+    if len(parts) < 3:
+        await query.answer("Cancelled")
+        return
+
+    job_id = parts[1]
+    try:
+        expected_user = int(parts[2])
+    except (ValueError, TypeError):
+        await query.answer("Cancelled")
+        return
+
+    if query.from_user and query.from_user.id != expected_user:
+        await query.answer("⚠️ This download menu belongs to another user.", show_alert=True)
+        return
+
+    await query.answer("Download cancelled")
+    _PENDING_YT_JOBS.pop(job_id, None)
+    await query.message.edit_text("❌ <b>Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+
+
+
 def add_handler_to_client(client: Client, handler, group: int = 0):
     """Safely register handler synchronously on Pyrogram dispatcher without floating loop tasks."""
     if hasattr(client, "dispatcher") and client.dispatcher:
@@ -4083,7 +4490,8 @@ def register_all_handlers(client: Client):
     # User Commands
     add_handler_to_client(client, MessageHandler(start_cmd, filters.command("start") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(help_cmd, filters.command("help") & filters.private & auth_filter))
-    add_handler_to_client(client, MessageHandler(id_cmd, filters.command("id") & filters.private))
+    add_handler_to_client(client, MessageHandler(id_cmd, filters.command("id")))
+    add_handler_to_client(client, EditedMessageHandler(id_cmd, filters.command("id")))
     add_handler_to_client(client, MessageHandler(drm_cmd, filters.command("drm") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_status_cmd, filters.command("status") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_stop_cmd, filters.command(["stop", "pause"]) & filters.private & auth_filter))
@@ -4143,9 +4551,13 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, CallbackQueryHandler(menu_callbacks, filters.regex(r"^menu_")))
     add_handler_to_client(client, CallbackQueryHandler(result_file_callback, filters.regex(r"^res_(succ|fail)_")))
     add_handler_to_client(client, CallbackQueryHandler(retry_failed_callback, filters.regex(r"^retry_fail_")))
+    add_handler_to_client(client, CallbackQueryHandler(youtube_quality_callback, filters.regex(r"^ytq:")))
+    add_handler_to_client(client, CallbackQueryHandler(youtube_menu_callback, filters.regex(r"^ytmenu:")))
+    add_handler_to_client(client, CallbackQueryHandler(youtube_cancel_callback, filters.regex(r"^ytcancel:")))
     add_handler_to_client(client, CallbackQueryHandler(features_callback, filters.regex("features")))
     add_handler_to_client(client, CallbackQueryHandler(details_callback, filters.regex("details")))
     add_handler_to_client(client, CallbackQueryHandler(back_to_start_callback, filters.regex("back_to_start")))
+
 
 
 _CLIENTS_BY_ID: Dict[str, Client] = {}

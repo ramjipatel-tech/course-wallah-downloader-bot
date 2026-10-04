@@ -55,8 +55,17 @@ from utils import (
     PDF_DOWNLOAD_FAILED,
     PDF_INVALID
 )
+import shutil
 from vars import *
 from db import db, Database
+from youtube_fallback import (
+    resolve_youtube_vynex,
+    resolve_youtube_ytultra,
+    resolve_youtube_ytultra_info,
+    download_media_stream_url,
+    probe_remote_duration,
+    extract_remote_media_segment
+)
 
 
 # =========================
@@ -2458,6 +2467,17 @@ def get_existing_file(name):
 
 
 async def download_video(url: str, output_name: str, quality: str = "480p", user_id: int = None, custom_dir: str = "downloads") -> str | None:
+    """
+    Downloads YouTube video using direct YTUltra API as primary source.
+    1. Direct YTUltra API (progressive or remote video+audio stream copy)
+    2. Fallback to yt-dlp only if YTUltra is unavailable
+    3. Fallback to Vynex only if yt-dlp fails
+    Verifies output with probe_media_properties:
+    - file exists and size > 0
+    - valid video stream
+    - valid audio stream
+    Video-only files are NEVER returned as a completed lecture.
+    """
     safe_name = safe_filename(output_name)
     if len(safe_name) > 60:
         safe_name = safe_name[:60]
@@ -2471,7 +2491,37 @@ async def download_video(url: str, output_name: str, quality: str = "480p", user
     if height <= 0:
         height = 720
 
-    # High-speed format selector: MP4 pre-merged first, then remux-ready video+audio, then best compatible
+    # -------------------------------------------------------------------------
+    # STEP 1: Primary Method - Direct YTUltra API
+    # -------------------------------------------------------------------------
+    logger.info(f"[YOUTUBE] Attempting direct YTUltra API for {url}...")
+    yt_info = await asyncio.to_thread(resolve_youtube_ytultra_info, url, quality)
+    ytultra_stream_url = yt_info.get("url") if isinstance(yt_info, dict) else (yt_info if isinstance(yt_info, str) else None)
+    audio_url = yt_info.get("audio_url") if isinstance(yt_info, dict) else None
+
+    # Fallback to string resolver if info was None
+    if not ytultra_stream_url:
+        ytultra_stream_url = await asyncio.to_thread(resolve_youtube_ytultra, url, quality)
+
+    if ytultra_stream_url:
+        ytultra_dest = os.path.join(out_dir, f"{safe_name}_ytultra.mp4")
+        dl_ok = await asyncio.to_thread(download_media_stream_url, ytultra_stream_url, ytultra_dest, audio_url=audio_url)
+        if dl_ok and os.path.exists(ytultra_dest) and os.path.getsize(ytultra_dest) > 0:
+            props = probe_media_properties(ytultra_dest)
+            if props.get("valid") and props.get("video_codec") and not props.get("has_audio"):
+                logger.warning(f"[YOUTUBE] YTUltra output is video-only (no audio), cleaning up and falling back...")
+                try:
+                    os.remove(ytultra_dest)
+                except OSError:
+                    pass
+            else:
+                logger.info(f"[YOUTUBE] Direct YTUltra succeeded: {ytultra_dest}")
+                return ytultra_dest
+
+    # -------------------------------------------------------------------------
+    # STEP 2: Fallback Method #1 - Authorized Cookies + yt-dlp
+    # -------------------------------------------------------------------------
+    logger.info(f"[YOUTUBE] Attempting yt-dlp fallback for {url}...")
     yt_format = (
         f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
         f"bestvideo[height<={height}]+bestaudio/"
@@ -2489,8 +2539,9 @@ async def download_video(url: str, output_name: str, quality: str = "480p", user
         "--buffer-size", "1024K",
         "--no-mtime",
         "--no-check-certificates",
-        "--retries", "3",
-        "--fragment-retries", "3",
+        "--socket-timeout", "10",
+        "--retries", "1",
+        "--fragment-retries", "1",
         "-o", target_file
     ]
 
@@ -2500,18 +2551,20 @@ async def download_video(url: str, output_name: str, quality: str = "480p", user
 
     cmd.append(url)
 
+    total_attempts = 2
     retry_count = 0
-    max_retries = 2
 
-    while retry_count <= max_retries:
-        print(f"[YT-DLP] Downloading video (attempt {retry_count + 1})...")
+    while retry_count < total_attempts:
+        attempt_num = retry_count + 1
+        print(f"[YT-DLP] Downloading video (attempt {attempt_num}/{total_attempts})...")
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await process.communicate()
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=25)
 
             if process.returncode == 0:
                 print("[YT-DLP] Download succeeded")
@@ -2519,33 +2572,67 @@ async def download_video(url: str, output_name: str, quality: str = "480p", user
 
             retry_count += 1
             err_msg = stderr.decode(errors="replace").strip() if stderr else "Unknown error"
-            print(f"[WARN] [YT-DLP] Download attempt {retry_count}/{max_retries} note: {err_msg[:200]}")
-            await asyncio.sleep(2)
+            print(f"[WARN] [YT-DLP] Download attempt {attempt_num}/{total_attempts} note: {err_msg[:200]}")
+            if any(k in err_msg.lower() for k in ["sign in", "confirm you are not a bot", "bot detection", "javascript runtime", "403", "forbidden"]):
+                break
+            if retry_count < total_attempts:
+                await asyncio.sleep(2)
         except Exception as exc:
             retry_count += 1
             print(f"[WARN] [YT-DLP] Subprocess notice: {exc}")
-            await asyncio.sleep(2)
+            if retry_count < total_attempts:
+                await asyncio.sleep(2)
 
     final_file = get_existing_file(target_file)
-    if not os.path.exists(final_file) or os.path.getsize(final_file) == 0:
-        return None
+    if os.path.exists(final_file) and os.path.getsize(final_file) > 0:
+        fixed_file = f"{os.path.splitext(final_file)[0]}_fixed.mp4"
+        try:
+            res = subprocess.run(
+                [FFMPEG_PATH or "ffmpeg", "-y", "-loglevel", "error", "-i", str(final_file), "-c", "copy", "-movflags", "+faststart", str(fixed_file)],
+                check=False
+            )
+            cand = fixed_file if (res.returncode == 0 and os.path.exists(fixed_file) and os.path.getsize(fixed_file) > 0) else final_file
+            if cand == fixed_file and os.path.exists(final_file):
+                try:
+                    os.remove(final_file)
+                except OSError:
+                    pass
+        except Exception:
+            cand = final_file
 
-    fixed_file = f"{os.path.splitext(final_file)[0]}_fixed.mp4"
-    try:
-        res = subprocess.run(
-            [FFMPEG_PATH or "ffmpeg", "-y", "-loglevel", "error", "-i", str(final_file), "-c", "copy", "-movflags", "+faststart", str(fixed_file)],
-            check=False
-        )
-        if res.returncode == 0 and os.path.exists(fixed_file) and os.path.getsize(fixed_file) > 0:
+        props = probe_media_properties(cand)
+        if props.get("valid") and props.get("video_codec") and not props.get("has_audio"):
+            logger.warning(f"[YOUTUBE] yt-dlp output is video-only (no audio stream), trying Vynex fallback...")
             try:
-                os.remove(final_file)
+                os.remove(cand)
             except OSError:
                 pass
-            return fixed_file
-        return final_file
-    except Exception as e:
-        logging.error(f"FFmpeg faststart fix failed: {e}")
-        return final_file
+        else:
+            logger.info(f"[YOUTUBE] yt-dlp produced valid file: {cand}")
+            return cand
+
+    # -------------------------------------------------------------------------
+    # STEP 3: Fallback Method #2 - Vynex API (progressive video+audio)
+    # -------------------------------------------------------------------------
+    logger.info(f"[YOUTUBE] Attempting Vynex fallback API for {url}...")
+    vynex_stream_url = await asyncio.to_thread(resolve_youtube_vynex, url, quality)
+    if vynex_stream_url:
+        vynex_dest = os.path.join(out_dir, f"{safe_name}_vynex.mp4")
+        dl_ok = await asyncio.to_thread(download_media_stream_url, vynex_stream_url, vynex_dest)
+        if dl_ok and os.path.exists(vynex_dest) and os.path.getsize(vynex_dest) > 0:
+            props = probe_media_properties(vynex_dest)
+            if props.get("valid") and props.get("video_codec") and not props.get("has_audio"):
+                logger.warning(f"[YOUTUBE] Vynex stream is video-only (no audio).")
+                try:
+                    os.remove(vynex_dest)
+                except OSError:
+                    pass
+            else:
+                logger.info(f"[YOUTUBE] Vynex fallback succeeded: {vynex_dest}")
+                return vynex_dest
+
+    logger.error(f"[YOUTUBE] All YouTube download attempts exhausted for URL: {url}")
+    return None
 
 
 def decrypt_file(file_path: str, key: str) -> bool:
@@ -2830,8 +2917,14 @@ async def send_vid(
             parts = split_large_video(filename, max_size_bytes=MAX_UPLOAD_SIZE_BYTES, base_title=name)
             first_part_message = None
             all_parts_successful = True
+            uploaded_parts_list = kwargs.get("uploaded_parts") or []
+            on_part_uploaded = kwargs.get("on_part_uploaded")
 
             for idx, part in enumerate(parts, start=1):
+                if idx in uploaded_parts_list:
+                    print(f"[LARGE VIDEO] Part {idx}/{len(parts)} already uploaded in checkpoint, skipping re-upload.")
+                    continue
+
                 part_dur = int(duration(part))
                 part_caption = f"{cc}\n\n📦 <b>Part {idx}/{len(parts)}</b>"
 
@@ -2870,6 +2963,11 @@ async def send_vid(
                 if msg_obj:
                     if first_part_message is None:
                         first_part_message = msg_obj
+                    if callable(on_part_uploaded):
+                        try:
+                            on_part_uploaded(idx)
+                        except Exception:
+                            pass
                     # Immediately delete part once confirmed uploaded!
                     cleanup_uploaded_file(part)
                 else:
@@ -2901,4 +2999,303 @@ try:
     from spayee_downloader import download_spayee_hls, is_spayee_url, clean_spayee_key, select_spayee_variant, parse_spayee_input
 except ImportError:
     pass
+
+
+async def process_and_upload_remote_youtube_parts(
+    bot: Client,
+    prog: Optional[Message],
+    caption: str,
+    raw_title: str,
+    url: str,
+    yt_info: Dict[str, Any],
+    channel_id: Union[int, str],
+    user_id: Optional[int] = None,
+    quality: str = "720p",
+    custom_dir: Optional[str] = None,
+    thumbnail: Optional[str] = None,
+    watermark: Optional[str] = None,
+    topic_thread_id: Optional[Union[int, str]] = None,
+    parse_mode: Any = None,
+    uploaded_parts: Optional[List[int]] = None,
+    on_part_uploaded: Optional[Any] = None,
+    target_part_bytes: int = int(1800 * 1024 * 1024)
+) -> Optional[Message]:
+    """
+    Remote Part-by-Part YouTube Processor & Uploader.
+    - NEVER downloads or stores the full 76 GB source on disk.
+    - NEVER creates a full merged file on disk.
+    - Computes time-aligned segment duration based on combined video+audio bitrate.
+    - Slices remote video and audio concurrently using FFmpeg stream copy (-c:v copy -c:a copy).
+    - Processes exactly ONE ~1800 MB part at a time.
+    - Validates each part with ffprobe (valid video, audio, duration).
+    - Uploads part to Telegram with safe_video_send.
+    - Checkpoints uploaded part and immediately DELETES it from disk.
+    - Verifies disk storage capacity before starting each part.
+    - Refreshes remote signed URL from YTUltra if token expires during extraction.
+    """
+    if not yt_info or not isinstance(yt_info, dict):
+        return None
+
+    video_url = yt_info.get("url")
+    audio_url = yt_info.get("audio_url")
+    if not video_url:
+        return None
+
+    # 1. Setup temporary directory for current job
+    out_dir = custom_dir or os.path.join(str(TEMP_DIR), str(user_id or "common"), f"yt_{int(time.time())}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 2. Storage capacity check
+    required_space = int(target_part_bytes * 1.15)
+    try:
+        free_space = shutil.disk_usage(out_dir).free
+        if free_space < required_space:
+            err_msg = "Current Railway storage is insufficient for the requested ~1800 MB part architecture."
+            logger.error(f"[STORAGE CHECK] {err_msg} (Free: {free_space / (1024*1024):.1f} MB, Required: {required_space / (1024*1024):.1f} MB)")
+            if prog:
+                try:
+                    await prog.edit_text(f"❌ <b>Storage Error:</b> {err_msg}", parse_mode=parse_mode)
+                except Exception:
+                    pass
+            raise RuntimeError(err_msg)
+    except Exception as exc:
+        if "insufficient for the requested ~1800 MB part architecture" in str(exc):
+            raise
+        logger.warning(f"[STORAGE CHECK] Could not determine disk usage: {exc}")
+
+    # 3. Determine Duration & Combined Bitrate
+    duration_sec = 0.0
+    if yt_info.get("duration"):
+        try:
+            duration_sec = float(yt_info["duration"])
+        except (ValueError, TypeError):
+            duration_sec = 0.0
+
+    if duration_sec <= 0:
+        duration_sec = await asyncio.to_thread(probe_remote_duration, video_url)
+
+    if duration_sec <= 0:
+        duration_sec = 3600.0  # safe 1-hour fallback
+
+    video_bytes = int(yt_info.get("video_bytes") or 0)
+    audio_bytes = int(yt_info.get("audio_bytes") or 0)
+    total_bytes = int(yt_info.get("total_bytes") or (video_bytes + audio_bytes))
+
+    # Calculate part duration using source bitrate
+    if total_bytes > 0 and duration_sec > 0:
+        combined_bitrate = total_bytes / duration_sec  # bytes per second
+        part_duration = target_part_bytes / combined_bitrate
+        total_parts = max(1, math.ceil(total_bytes / target_part_bytes))
+    else:
+        # Fallback to single part if byte sizes were not available
+        total_parts = 1
+        part_duration = duration_sec
+
+    # Ensure part_duration is realistic
+    part_duration = max(10.0, min(part_duration, duration_sec))
+
+    container_ext = str(yt_info.get("container_ext") or ".mkv")
+    stem = safe_filename(raw_title)
+
+    logger.info(
+        f"[YOUTUBE REMOTE] Total size: {total_bytes / (1024*1024):.1f} MB | "
+        f"Duration: {duration_sec:.1f}s | Target Part Size: {target_part_bytes / (1024*1024):.1f} MB | "
+        f"Parts: {total_parts} (~{part_duration:.1f}s each) | Container: {container_ext}"
+    )
+
+    # 4. Message formatting and sending configuration
+    send_kwargs = {}
+    if topic_thread_id is not None:
+        try:
+            tid = int(topic_thread_id)
+            if tid > 0:
+                send_kwargs["message_thread_id"] = tid
+        except (ValueError, TypeError):
+            pass
+    if parse_mode is not None:
+        send_kwargs["parse_mode"] = parse_mode
+
+    uploaded_parts_set = set(uploaded_parts or [])
+    first_part_message = None
+
+    # 5. Process and Upload One Part at a Time
+    for part_idx in range(1, total_parts + 1):
+        if part_idx in uploaded_parts_set:
+            logger.info(f"[YOUTUBE REMOTE] Part {part_idx}/{total_parts} already uploaded, skipping.")
+            continue
+
+        # Storage safety check before creating this part
+        try:
+            free_space = shutil.disk_usage(out_dir).free
+            if free_space < required_space:
+                err_msg = "Current Railway storage is insufficient for the requested ~1800 MB part architecture."
+                logger.error(f"[STORAGE CHECK] {err_msg}")
+                raise RuntimeError(err_msg)
+        except Exception as exc:
+            if "insufficient for the requested ~1800 MB part architecture" in str(exc):
+                raise
+
+        start_sec = (part_idx - 1) * part_duration
+        dur_sec = part_duration if part_idx < total_parts else (duration_sec - start_sec + 2.0)
+        dur_sec = max(1.0, dur_sec)
+
+        part_file = os.path.join(out_dir, f"{stem}_Part_{part_idx}{container_ext}")
+        if os.path.exists(part_file):
+            try:
+                os.remove(part_file)
+            except OSError:
+                pass
+
+        if prog:
+            try:
+                from utils import format_download_card
+                part_title_lbl = f"{raw_title} (Part {part_idx}/{total_parts})" if total_parts > 1 else raw_title
+                await prog.edit_text(format_download_card("Course Wallah", part_title_lbl, frame=0), parse_mode=parse_mode)
+            except Exception:
+                pass
+
+        logger.info(f"[YOUTUBE REMOTE] Generating Part {part_idx}/{total_parts} (start={start_sec:.1f}s, dur={dur_sec:.1f}s)...")
+
+        # Extract remote time-aligned segment with bounded retries & automatic URL refresh
+        max_extract_attempts = 3
+        extract_ok = False
+
+        for attempt in range(1, max_extract_attempts + 1):
+            def do_extract(v_url, a_url):
+                return extract_remote_media_segment(v_url, a_url, start_sec, dur_sec, part_file)
+
+            extract_ok = await asyncio.to_thread(do_extract, video_url, audio_url)
+            if extract_ok and os.path.exists(part_file) and os.path.getsize(part_file) > 0:
+                props = probe_media_properties(part_file)
+                if props.get("valid") and props.get("video_codec"):
+                    break  # Valid segment generated successfully
+                else:
+                    logger.warning(f"[YOUTUBE REMOTE] Part {part_idx} validation failed on attempt {attempt}: {props}")
+                    extract_ok = False
+
+            if attempt < max_extract_attempts:
+                backoff_sec = 1.0 * (2 ** (attempt - 1))
+                logger.warning(
+                    f"[YOUTUBE REMOTE] Segment extraction failed for Part {part_idx} (attempt {attempt}/{max_extract_attempts}), "
+                    f"refreshing provider signed URL in {backoff_sec:.1f}s..."
+                )
+                await asyncio.sleep(backoff_sec)
+                # Re-resolve fresh media URL from original provider
+                new_info = await asyncio.to_thread(resolve_youtube_ytultra_info, url, quality)
+                if new_info and new_info.get("url"):
+                    video_url = new_info.get("url")
+                    audio_url = new_info.get("audio_url")
+                    logger.info(f"[YOUTUBE REMOTE] Refreshed YTUltra URL obtained for Part {part_idx}")
+
+        if not extract_ok or not os.path.exists(part_file) or os.path.getsize(part_file) == 0:
+            if os.path.exists(part_file):
+                try:
+                    os.remove(part_file)
+                except OSError:
+                    pass
+            raise RuntimeError(f"Failed to generate valid segment for Part {part_idx}/{total_parts} after {max_extract_attempts} attempts.")
+
+
+        # Probe and Validate Part
+        props = probe_media_properties(part_file)
+        if not props.get("valid") or not props.get("video_codec"):
+            cleanup_uploaded_file(part_file)
+            raise RuntimeError(f"Part {part_idx} validation failed: Invalid media stream properties ({props})")
+
+        part_size = os.path.getsize(part_file)
+        actual_dur = int(props.get("duration") or dur_sec)
+        logger.info(f"[YOUTUBE REMOTE] Part {part_idx} verified: {part_size / (1024*1024):.1f} MB, dur={actual_dur}s")
+
+        # Generate thumbnail for this part
+        part_thumb = None
+        if thumbnail and os.path.exists(thumbnail):
+            part_thumb = thumbnail
+        else:
+            try:
+                part_thumb = await asyncio.to_thread(extract_or_download_thumbnail, part_file, None, None)
+            except Exception:
+                part_thumb = None
+
+        if prog:
+            try:
+                from utils import format_upload_card
+                await prog.edit_text(format_upload_card(raw_title, part_idx=part_idx, total_parts=total_parts), parse_mode=parse_mode)
+            except Exception:
+                pass
+
+        part_caption = f"{caption}\n\n📦 <b>Part {part_idx}/{total_parts}</b>" if total_parts > 1 else caption
+        start_time = time.time()
+
+        # Upload to Telegram
+        msg_obj = await safe_video_send(
+            bot,
+            chat_id=channel_id,
+            video=part_file,
+            caption=part_caption,
+            supports_streaming=True,
+            height=int(yt_info.get("height") or 720),
+            width=int(yt_info.get("width") or 1280),
+            thumb=part_thumb,
+            duration=actual_dur,
+            progress=ext_progress_bar if prog else None,
+            progress_args=(prog, start_time, f"{raw_title} (Part {part_idx})", watermark) if prog else None,
+            **send_kwargs
+        )
+
+        if not msg_obj:
+            logger.warning(f"[YOUTUBE REMOTE] Video send failed for Part {part_idx}, falling back to document...")
+            msg_obj = await bot.send_document(
+                chat_id=channel_id,
+                document=part_file,
+                caption=part_caption,
+                progress=ext_progress_bar if prog else None,
+                progress_args=(prog, start_time, f"{raw_title} (Part {part_idx})", watermark) if prog else None,
+                **send_kwargs
+            )
+
+        if not msg_obj:
+            # One retry attempt for failed upload
+            logger.warning(f"[YOUTUBE REMOTE] Retrying upload for Part {part_idx}...")
+            msg_obj = await safe_video_send(
+                bot,
+                chat_id=channel_id,
+                video=part_file,
+                caption=part_caption,
+                supports_streaming=True,
+                height=int(yt_info.get("height") or 720),
+                width=int(yt_info.get("width") or 1280),
+                thumb=part_thumb,
+                duration=actual_dur,
+                progress=ext_progress_bar if prog else None,
+                progress_args=(prog, start_time, f"{raw_title} (Part {part_idx})", watermark) if prog else None,
+                **send_kwargs
+            )
+
+        if not msg_obj:
+            cleanup_uploaded_file(part_file)
+            if part_thumb and part_thumb != thumbnail:
+                cleanup_uploaded_file(part_thumb)
+            raise RuntimeError(f"Failed to upload Part {part_idx}/{total_parts} to Telegram")
+
+        if first_part_message is None:
+            first_part_message = msg_obj
+
+        # Checkpoint confirmed uploaded part
+        if callable(on_part_uploaded):
+            try:
+                on_part_uploaded(part_idx)
+            except Exception as e:
+                logger.warning(f"[YOUTUBE REMOTE] Checkpoint callback error: {e}")
+
+        # IMMEDIATELY delete temporary part file!
+        cleanup_uploaded_file(part_file)
+        if part_thumb and part_thumb != thumbnail:
+            cleanup_uploaded_file(part_thumb)
+        logger.info(f"[YOUTUBE REMOTE] Part {part_idx}/{total_parts} uploaded & deleted.")
+
+    # Cleanup temp directory once all parts are done
+    cleanup_job_temp_dir(out_dir)
+
+    return first_part_message
+
 

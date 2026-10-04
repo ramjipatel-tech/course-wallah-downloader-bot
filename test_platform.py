@@ -200,7 +200,7 @@ class TestDownloaderPlatform(unittest.TestCase):
         self.assertIn("TEST_JOB", box_text)
         self.assertIn("Data Structures", box_text)
         self.assertIn("20.0%", box_text)
-        self.assertIn("MB/s", box_text)
+        self.assertNotIn("MB/s", box_text)
 
     def test_07_academic_parser(self):
         sample_course_txt = """

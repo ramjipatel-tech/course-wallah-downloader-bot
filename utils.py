@@ -6,10 +6,11 @@ import asyncio
 from enum import Enum
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List, Tuple, Set
 import shutil
 import logging
 import tempfile
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, MessageNotModified
 from vars import CREDIT, PROJECT_ROOT, DATA_DIR, TEMP_DIR, DOWNLOADS_DIR
 
@@ -25,6 +26,7 @@ class MediaType(str, Enum):
     DIRECT_PDF = "DIRECT_PDF"
     KGS_HLS = "KGS_HLS"
     SPAYEE_HLS = "SPAYEE_HLS"
+    GO_CLASSES = "GO_CLASSES"
     YOUTUBE = "YOUTUBE"
     ENCRYPTED_STREAM = "ENCRYPTED_STREAM"
     DIRECT_M3U8 = "DIRECT_M3U8"
@@ -142,7 +144,7 @@ def is_direct_image_url(url: str, category_hint: Optional[str] = None) -> bool:
 
 
 def is_spayee_url(url: str) -> bool:
-    """Detects whether a given URL is a Spayee HLS stream resource (spayee.in, qcdn.spayee.in, vcdn.spayee.in)."""
+    """Detects whether a given URL is a Spayee HLS stream resource (spayee.in, qcdn.spayee.in, vcdn.spayee.in, media.spayee.com, spees.in)."""
     if not url or not isinstance(url, str):
         return False
     clean = url.strip()
@@ -150,9 +152,35 @@ def is_spayee_url(url: str) -> bool:
         return False
     base_url = clean.split("*")[0].strip()
     parsed = urlparse(base_url)
-    netloc = (parsed.netloc or "").lower()
+    host = (parsed.hostname or parsed.netloc or "").lower()
     path = (parsed.path or "").lower()
-    return any(d in netloc for d in ("spayee.in", "qcdn.spayee.in", "vcdn.spayee.in", "spayee")) or ("spayee" in netloc or "spayee" in path)
+    return (
+        any(d in host for d in ("spayee.in", "spayee.com", "spees.in", "spees", "spayee"))
+        or "spayee" in host
+        or "spayee" in path
+        or "spees" in host
+        or "spees" in path
+    )
+
+
+def is_goclasses_url(url: str) -> bool:
+    """Detects whether a given URL is a Go Classes / GateOverflow stream or video resource."""
+    if not url or not isinstance(url, str):
+        return False
+    clean = url.strip()
+    if not clean:
+        return False
+    base_url = clean.split("*")[0].strip()
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    return (
+        any(d in host for d in ("goclasses.in", "goclasses", "gateoverflow.in", "gateoverflow"))
+        or "goclasses" in host
+        or "goclasses" in path
+        or "gateoverflow" in host
+        or "gateoverflow" in path
+    )
 
 
 def is_kgs_url(url: str) -> bool:
@@ -183,15 +211,39 @@ def is_kgs_url(url: str) -> bool:
 
 
 def is_youtube_url(url: str) -> bool:
-    """Detects whether a given URL is a YouTube video/playlist/short."""
+    """
+    Detects whether a given URL is strictly a YouTube video/playlist/short/live.
+    Uses strict domain and hostname parsing without loose substring checks.
+    """
     if not url or not isinstance(url, str):
         return False
-    clean = url.strip().lower()
+    clean = url.strip().split("*")[0].strip()
     if not clean:
         return False
-    parsed = urlparse(clean)
-    netloc = parsed.netloc or ""
-    return any(d in netloc for d in ("youtube.com", "youtu.be", "youtube-nocookie.com", "m.youtube.com")) or "youtube" in netloc
+    try:
+        parsed = urlparse(clean)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        
+        strict_yt_hosts = {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "youtu.be",
+            "youtube-nocookie.com",
+            "www.youtube-nocookie.com",
+            "music.youtube.com"
+        }
+        if hostname in strict_yt_hosts:
+            return True
+        if hostname.endswith(".youtube.com") or hostname == "youtu.be":
+            return True
+        return False
+    except Exception:
+        return False
 
 
 def is_encrypted_stream_url(url: str) -> bool:
@@ -200,7 +252,7 @@ def is_encrypted_stream_url(url: str) -> bool:
         return False
     clean = url.strip()
     lower = clean.lower()
-    if is_spayee_url(clean):
+    if is_spayee_url(clean) or is_goclasses_url(clean):
         return False
     if is_direct_pdf_url(clean):
         return False
@@ -319,6 +371,43 @@ def is_direct_video_url(url: str) -> bool:
     return False
 
 
+def resolve_redirect_url(url: str, timeout: int = 5) -> str:
+    """
+    Safely resolves referral / redirect / shortlink URLs to their canonical destination.
+    Preserves signed URL parameters and authorized keys (*KEY).
+    """
+    if not url or not isinstance(url, str):
+        return url
+    clean = url.strip()
+    if not clean:
+        return url
+
+    key_part = None
+    target_url = clean
+    if "*" in clean:
+        parts = clean.split("*", 1)
+        target_url = parts[0].strip()
+        key_part = parts[1].strip() if len(parts) > 1 else None
+
+    try:
+        parsed = urlparse(target_url)
+        host = (parsed.hostname or "").lower()
+        shortener_hosts = {
+            "bit.ly", "tinyurl.com", "t.co", "goo.gl", "rotf.lol",
+            "shorturl.at", "ow.ly", "buff.ly", "is.gd", "cutt.ly"
+        }
+        if host in shortener_hosts or "/r/" in parsed.path or "/referral/" in parsed.path:
+            import requests
+            resp = requests.head(target_url, allow_redirects=True, timeout=timeout)
+            resolved = resp.url
+            if resolved and resolved != target_url:
+                return f"{resolved}*{key_part}" if key_part else resolved
+    except Exception:
+        pass
+
+    return clean
+
+
 class MediaRouter:
     """
     Independent media URL classifier and router.
@@ -328,24 +417,28 @@ class MediaRouter:
     Priority Order:
     1. DIRECT_IMAGE
     2. DIRECT_PDF
-    3. KGS_HLS
-    4. SPAYEE_HLS
-    5. YOUTUBE
-    6. ENCRYPTED_STREAM
-    7. DIRECT_M3U8 / HLS
-    8. APPX / CLASSPLUS
-    9. DIRECT_VIDEO
+    3. APPX_LECTURE (Authorized endpoints)
+    4. KGS_HLS (Khan Global Studies)
+    5. SPAYEE_HLS (Spayee CDN)
+    6. GO_CLASSES (Go Classes / GateOverflow)
+    7. ENCRYPTED_STREAM (AES streams)
+    8. DIRECT_M3U8 / HLS
+    9. DIRECT_VIDEO (mp4, mkv, webm, etc.)
+    10. YOUTUBE (Strict youtube.com, youtu.be)
+    11. UNKNOWN (Unsupported source)
     """
     is_direct_image_url = staticmethod(is_direct_image_url)
     is_direct_pdf_url = staticmethod(is_direct_pdf_url)
     is_kgs_url = staticmethod(is_kgs_url)
     is_spayee_url = staticmethod(is_spayee_url)
+    is_goclasses_url = staticmethod(is_goclasses_url)
     is_youtube_url = staticmethod(is_youtube_url)
     is_encrypted_stream_url = staticmethod(is_encrypted_stream_url)
     is_hls_url = staticmethod(is_hls_url)
     is_direct_m3u8_url = staticmethod(is_direct_m3u8_url)
     is_appx_url = staticmethod(is_appx_url)
     is_direct_video_url = staticmethod(is_direct_video_url)
+    resolve_redirect_url = staticmethod(resolve_redirect_url)
 
     @staticmethod
     def classify_url(url: str, category_hint: Optional[str] = None) -> MediaType:
@@ -356,7 +449,7 @@ class MediaRouter:
         if not clean:
             return MediaType.UNKNOWN
 
-        # 1. DIRECT_IMAGE (jpg, jpeg, png, webp, gif, bmp)
+        # 1. DIRECT_IMAGE (jpg, jpeg, png, webp, gif, bmp, svg)
         if is_direct_image_url(clean, category_hint=category_hint):
             return MediaType.DIRECT_IMAGE
 
@@ -364,40 +457,49 @@ class MediaRouter:
         if is_direct_pdf_url(clean, category_hint=category_hint):
             return MediaType.DIRECT_PDF
 
-        # 3. KGS_HLS (Khan Global Studies / Akamaized signed HLS)
+        # 3. APPX / CLASSPLUS (ClassX / Classplus / Authorized Lecture API URLs)
+        if is_appx_url(clean):
+            return MediaType.APPX_LECTURE
+
+        # 4. KGS_HLS (Khan Global Studies / Akamaized signed HLS)
         if is_kgs_url(clean):
             return MediaType.KGS_HLS
 
-        # 4. SPAYEE_HLS (qcdn.spayee.in, vcdn.spayee.in, spayee.in)
+        # 5. SPAYEE_HLS (qcdn.spayee.in, vcdn.spayee.in, spayee.in, spees)
         if is_spayee_url(clean):
             return MediaType.SPAYEE_HLS
 
-        # 5. YOUTUBE (youtube.com, youtu.be, youtube-nocookie.com)
-        if is_youtube_url(clean):
-            return MediaType.YOUTUBE
+        # 6. GO_CLASSES (goclasses.in, gateoverflow.in)
+        if is_goclasses_url(clean):
+            return MediaType.GO_CLASSES
 
-        # 6. ENCRYPTED_STREAM (dragoapi, encrypted.m, etc. - excluding Spayee/PDF)
+        # 7. ENCRYPTED_STREAM (dragoapi, encrypted.m, etc. - excluding Spayee/GoClasses/PDF)
         if is_encrypted_stream_url(clean):
             return MediaType.ENCRYPTED_STREAM
 
-        # 7. DIRECT_M3U8 / HLS (CloudFront HLS, Akamai, generic HLS)
+        # 8. DIRECT_M3U8 / HLS (CloudFront HLS, Akamai, generic HLS)
         if is_hls_url(clean):
             return MediaType.DIRECT_M3U8
-
-        # 8. APPX / CLASSPLUS (ClassX / Classplus / Authorized Lecture API URLs)
-        if is_appx_url(clean):
-            return MediaType.APPX_LECTURE
 
         # 9. DIRECT_VIDEO (.mp4, .mkv, .webm, .avi, .mov, .ts, .flv)
         if is_direct_video_url(clean):
             return MediaType.DIRECT_VIDEO
 
-        # Default fallback: If it mentions lecture or api, treat as APPX; otherwise generic direct video
+        # 10. YOUTUBE (Strict youtube.com, youtu.be, youtube-nocookie.com)
+        if is_youtube_url(clean):
+            return MediaType.YOUTUBE
+
+        # 11. Check if path/URL explicitly indicates APPX lecture endpoint
         lower = clean.lower()
-        if "/lecture/" in lower or "/api/" in lower:
+        if "/lecture/" in lower or "/api/" in lower or "/fetch_video" in lower:
             return MediaType.APPX_LECTURE
 
-        return MediaType.DIRECT_VIDEO
+        # 12. Check if clean URL contains common video extensions in query/path
+        if re.search(r'\.(mp4|mkv|webm|avi|mov|ts|flv)($|[?&#])', clean, re.I):
+            return MediaType.DIRECT_VIDEO
+
+        # If not safely identified as any supported source, return UNKNOWN (never generic fallback to YouTube)
+        return MediaType.UNKNOWN
 
     @staticmethod
     def extract_clean_title(url: str, default_title: Optional[str] = None) -> str:
@@ -532,25 +634,28 @@ class JobProgressTracker:
         phase_override: str = None
     ) -> str:
         phase_str = phase_override or self.phase
-        spinner = SPINNER_FRAMES[self.spinner_idx % len(SPINNER_FRAMES)]
         self.spinner_idx += 1
-        bar = make_progress_bar(percent)
+        dots = get_dot_animation(self.spinner_idx)
+        bullets = get_bullet_animation(self.spinner_idx)
 
+        # Internal technical logging only
+        logger.debug(f"[TRACKER] {self.job_id} | {self.current_item_title}: {percent:.1f}% ({current_bytes}/{total_bytes} bytes, {speed:.1f} B/s, ETA {eta:.1f}s)")
+
+        bar = make_progress_bar(percent)
         return (
-            f"╭─── ⚡ <b>DOWNLOAD</b> ───╮\n"
-            f"│ 📚 <b>Course:</b> {self.course_name}\n"
-            f"│ 🎬 <b>Item:</b> {self.current_item_index}/{self.total_items}\n"
-            f"│ 📌 <code>{self.current_item_title}</code>\n"
-            f"│\n"
-            f"│ {spinner} <code>{bar}</code> <b>{percent:5.1f}%</b>\n"
-            f"│\n"
-            f"│ ⚡ <b>Speed:</b> {hrb(speed)}/s\n"
-            f"│ 📦 <b>Size:</b> {hrb(current_bytes)} / {hrb(total_bytes)}\n"
-            f"│ ⏱ <b>ETA:</b> {hrt(eta)}\n"
-            f"│\n"
-            f"│ 🔄 <b>Phase:</b> {phase_str}\n"
-            f"│ 🆔 <b>Job:</b> <code>{self.job_id}</code>\n"
-            f"╰──────────────────╯"
+            "╭────────────────────────────╮\n"
+            "│       🎓 <b>COURSE WALLAH</b>     │\n"
+            "│                            │\n"
+            f"│    🔄 <b>{phase_str.upper()} {dots}</b>    │\n"
+            "│                            │\n"
+            f"│ 📚 <b>{self.course_name[:35]}</b>\n"
+            f"│ 🎬 <b>{self.current_item_index}/{self.total_items}: {self.current_item_title[:35]}</b>\n"
+            f"│ <code>{bar}</code> <b>{percent:5.1f}%</b>\n"
+            f"│ 🆔 <code>{self.job_id}</code>\n"
+            "│                            │\n"
+            f"│        {bullets}           │\n"
+            f"│   <i>Processing item {self.current_item_index} of {self.total_items}</i>   │\n"
+            "╰────────────────────────────╯"
         )
 
     async def update_message(
@@ -588,7 +693,8 @@ class JobProgressTracker:
 async def progress_bar(current, total, reply, start_time, name="{VIDEO}", watermark="{CREDIT}"):
     """
     Backwards-compatible progress callback used by pyrogram send_video / send_document.
-    Non-blocking, real speed calculation, safe floodwait handling.
+    Non-blocking, logs technical speeds and bytes internally, while providing a clean
+    animated Telegram status card without raw technical speed/bytes.
     """
     if not reply or total <= 0:
         return
@@ -603,20 +709,38 @@ async def progress_bar(current, total, reply, start_time, name="{VIDEO}", waterm
     if elapsed < 0.5:
         return
 
-    speed = current / elapsed
+    speed = current / elapsed if elapsed > 0 else 0.0
     percent = (current / total) * 100.0
-    eta = (total - current) / speed if speed > 0 else 0.0
-    bar = make_progress_bar(percent)
 
+    # Internal technical logging only
+    logger.debug(f"[UPLOAD PROGRESS] {str(name)[:30]}: {percent:.1f}% ({current/(1024*1024):.1f}/{total/(1024*1024):.1f} MB, {speed/(1024*1024):.2f} MB/s)")
+
+    frame = int(elapsed / 1.5)
+    dots = get_dot_animation(frame)
+    bullets = get_bullet_animation(frame)
+    clean_name = str(name)[:45]
+
+    part_match = re.search(r"\(Part\s+(\d+)\)", clean_name, re.IGNORECASE)
+    if part_match:
+        hdr = f"📤 <b>UPLOADING PART {part_match.group(1)} {dots}</b>"
+        sub_text = f"Uploading Part {part_match.group(1)}..."
+    else:
+        hdr = f"📤 <b>UPLOADING VIDEO {dots}</b>"
+        sub_text = "Uploading to Telegram..."
+
+    bar = make_progress_bar(percent)
     msg = (
-        f"╭─── 🚀 <b>UPLOADING</b> ───╮\n"
-        f"│ 🎬 <b>{str(name)[:35]}</b>\n"
-        f"│\n"
+        "╭────────────────────────────╮\n"
+        "│       🎓 <b>COURSE WALLAH</b>     │\n"
+        "│                            │\n"
+        f"│    {hdr}    │\n"
+        "│                            │\n"
+        f"│ 🎬 <b>{clean_name}</b>\n"
         f"│ <code>{bar}</code> <b>{percent:5.1f}%</b>\n"
-        f"│ ⚡ <b>Speed:</b> {hrb(speed)}/s\n"
-        f"│ 📦 <b>Size:</b> {hrb(current)} / {hrb(total)}\n"
-        f"│ ⏱ <b>ETA:</b> {hrt(eta)}\n"
-        f"╰──────────────────╯"
+        "│                            │\n"
+        f"│        {bullets}           │\n"
+        f"│   <i>{sub_text}</i>   │\n"
+        "╰────────────────────────────╯"
     )
 
     try:
@@ -927,6 +1051,110 @@ def format_success_card(
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🤖 <b>{credit or 'Course Wallah'}</b>"
     )
+
+
+def format_youtube_quality_menu(
+    title: str,
+    duration_sec: float,
+    qualities: List[Dict[str, Any]],
+    job_id: str,
+    user_id: int
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds a premium Telegram card with inline keyboard buttons for each REAL available quality.
+    """
+    dur_str = hrt(int(duration_sec)) if duration_sec > 0 else "N/A"
+    clean_title = (title or "YouTube Video")[:60]
+
+    text = (
+        "╭────────────────────────────╮\n"
+        "│      🎬 <b>VIDEO READY</b>       │\n"
+        "│    ⚡ <b>COURSE WALLAH</b>        │\n"
+        "╰────────────────────────────╯\n\n"
+        f"📌 <b>Title:</b> <code>{clean_title}</code>\n"
+        f"⏱ <b>Duration:</b> <code>{dur_str}</code>\n"
+        f"📺 <b>Available Streams:</b> {len(qualities)} options\n\n"
+        "👇 <b>Select Download Quality:</b>"
+    )
+
+    buttons = []
+    # 4K gets prominent full-width button if available
+    q_4k = [q for q in qualities if q.get("height", 0) >= 2160]
+    q_other = [q for q in qualities if q.get("height", 0) < 2160]
+
+    if q_4k:
+        q = q_4k[0]
+        size_lbl = f" • {q.get('formatted_size')}" if q.get("formatted_size") else ""
+        buttons.append([
+            InlineKeyboardButton(
+                f"🔥 4K UHD • 2160p{size_lbl}",
+                callback_data=f"ytq:{job_id}:2160:{user_id}"
+            )
+        ])
+
+    row = []
+    for q in q_other:
+        h = q.get("height", 720)
+        badge = q.get("badge", "🎥")
+        short_lbl = q.get("short_label", f"{h}p")
+        row.append(
+            InlineKeyboardButton(
+                f"{badge} {short_lbl}",
+                callback_data=f"ytq:{job_id}:{h}:{user_id}"
+            )
+        )
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("❌ Cancel", callback_data=f"ytcancel:{job_id}:{user_id}")
+    ])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def format_youtube_fallback_card(
+    title: str,
+    duration_sec: float,
+    requested_height: int,
+    highest_quality: Dict[str, Any],
+    job_id: str,
+    user_id: int
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Builds fallback card when requested quality (e.g. 4K) is unavailable.
+    """
+    dur_str = hrt(int(duration_sec)) if duration_sec > 0 else "N/A"
+    clean_title = (title or "YouTube Video")[:60]
+    target_h = highest_quality.get("height", 720)
+    target_lbl = highest_quality.get("short_label", f"{target_h}p")
+    target_badge = highest_quality.get("badge", "🎬")
+
+    req_lbl = "4K UHD (2160p)" if requested_height >= 2160 else f"{requested_height}p"
+
+    text = (
+        "╭────────────────────────────╮\n"
+        "│      ⚠️ <b>QUALITY NOTICE</b>     │\n"
+        "│    ⚡ <b>COURSE WALLAH</b>        │\n"
+        "╰────────────────────────────╯\n\n"
+        f"📌 <b>Title:</b> <code>{clean_title}</code>\n"
+        f"⏱ <b>Duration:</b> <code>{dur_str}</code>\n\n"
+        f"⚠️ <b>{req_lbl} is not available for this video.</b>\n"
+        f"🎯 <b>Highest available quality:</b> <b>{target_badge} {target_lbl}</b>\n\n"
+        f"<i>Would you like to download in {target_lbl}?</i>"
+    )
+
+    buttons = [
+        [InlineKeyboardButton(f"✅ Download {target_lbl}", callback_data=f"ytq:{job_id}:{target_h}:{user_id}")],
+        [InlineKeyboardButton("🎚 Choose Quality", callback_data=f"ytmenu:{job_id}:{user_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"ytcancel:{job_id}:{user_id}")]
+    ]
+
+    return text, InlineKeyboardMarkup(buttons)
+
 
 
 # ==============================================================================
