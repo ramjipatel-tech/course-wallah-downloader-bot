@@ -2748,7 +2748,6 @@ def _fmt_time(sec):
 def progress_bar(current, total, reply, start_time, name="{VIDEO}", credit="{CREDIT}"):
     """
     Progress callback for pyrogram uploads.
-    Logs technical details internally, while updating Telegram with a clean animated card.
     """
     if current <= 0 or total <= 0:
         return
@@ -2770,20 +2769,38 @@ def progress_bar(current, total, reply, start_time, name="{VIDEO}", credit="{CRE
     # Terminal logging only (internal)
     logging.debug(f"[UPLOAD] {name[:30]}: {percent:.1f}% ({current/(1024*1024):.1f}/{total/(1024*1024):.1f} MB, {speed/(1024*1024):.2f} MB/s)")
 
-    frame = int(diff / 1.5)
-    dots = "·" * ((frame % 3) + 1)
-    bullets = ["○", "○", "○", "○", "○"]
-    bullets[frame % 5] = "◉"
-    bullet_str = " ".join(bullets)
+    sp = f"{speed/(1024*1024):.2f} MB/s" if speed > 0 else "0 MB/s"
+    perc = f"{percent:.2f}%"
+    cur = f"{current/(1024*1024):.1f} MB" if current < 1024*1024*1024 else f"{current/(1024*1024*1024):.2f} GB"
+    tot = f"{total/(1024*1024):.1f} MB" if total < 1024*1024*1024 else f"{total/(1024*1024*1024):.2f} GB"
+    rem_sec = int((total - current) / speed) if speed > 0 else 0
+    mins, secs = divmod(rem_sec, 60)
+    eta = f"{mins:02d}m {secs:02d}s" if rem_sec > 0 else "00s"
+
+    pct = max(0.0, min(100.0, float(percent)))
+    filled = int(round(12 * (pct / 100.0)))
+    unfilled = 12 - filled
+    bar = "█" * filled + "░" * unfilled
+
+    from vars import BOT_USERNAME
+    bot_credit = f"@{BOT_USERNAME}" if BOT_USERNAME else "@course_wallah_official_bot"
 
     clean_name = safe_filename(name)[:45]
+    part_match = re.search(r"\(Part\s+(\d+)\)", clean_name, re.IGNORECASE)
+    if part_match:
+        hdr = f"📤 𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜 𝙋𝙖𝙧𝙩 {part_match.group(1)} 📤"
+    else:
+        hdr = "📤 𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜 📤"
 
     text = (
-        "📤 <b>UPLOADING VIDEO</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"🎬 <b>{clean_name}</b>\n\n"
-        f"📤 Uploading {dots}\n"
-        f"{bullet_str}"
+        f"**╭──⌈ {hdr} ⌋──╮**\n"
+        f"**┣⪼ [ {bar} ]**\n"
+        f"**┣⪼ 🚀 𝙎𝙥𝙚𝙚𝙙 :** {sp}\n"
+        f"**┣⪼ 📈 𝙋𝙧𝙤𝙜𝙧𝙚𝙨𝙨 :** {perc}\n"
+        f"**┣⪼ ⏳ 𝙇𝙤𝙖𝙙𝙚𝙙 :** {cur}\n"
+        f"**┣⪼ 🍁 𝙎𝙞𝙯𝙚 :** {tot}\n"
+        f"**┣⪼ 🕛 𝙀𝙏𝘼 :** {eta}\n"
+        f"**╰────⌈ ✪ {bot_credit} ✪ ⌋────╯**"
     )
 
     try:

@@ -270,10 +270,8 @@ class TestMasterRoutingAndSplitting(unittest.IsolatedAsyncioTestCase):
         await progress_bar(500 * 1024 * 1024, 1000 * 1024 * 1024, mock_reply, time.time() - 10, name="Lecture 01 (Part 1)")
         self.assertTrue(mock_reply.edit_text.called)
         call_text = mock_reply.edit_text.call_args[0][0]
-        self.assertIn("UPLOADING PART 1", call_text)
-        self.assertIn("50.0%", call_text)
-        self.assertNotIn("MB/s", call_text)
-        self.assertNotIn("ETA:", call_text)
+        self.assertIn("𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜 𝙋𝙖𝙧𝙩 1", call_text)
+        self.assertIn("50.00%", call_text)
 
     # ==========================================================================
     # 4. YOUTUBE FALLBACK CHAIN & FORMAT SELECTION TESTS

@@ -694,8 +694,7 @@ class JobProgressTracker:
 async def progress_bar(current, total, reply, start_time, name="{VIDEO}", watermark="{CREDIT}"):
     """
     Backwards-compatible progress callback used by pyrogram send_video / send_document.
-    Non-blocking, logs technical speeds and bytes internally, while providing a clean
-    animated Telegram status card without raw technical speed/bytes.
+    Non-blocking, with real speed, progress bar, loaded bytes, total size, and ETA.
     """
     if not reply or total <= 0:
         return
@@ -716,32 +715,34 @@ async def progress_bar(current, total, reply, start_time, name="{VIDEO}", waterm
     # Internal technical logging only
     logger.debug(f"[UPLOAD PROGRESS] {str(name)[:30]}: {percent:.1f}% ({current/(1024*1024):.1f}/{total/(1024*1024):.1f} MB, {speed/(1024*1024):.2f} MB/s)")
 
-    frame = int(elapsed / 1.5)
-    dots = get_dot_animation(frame)
-    bullets = get_bullet_animation(frame)
+    sp = f"{hrb(speed)}/s" if speed > 0 else "0 B/s"
+    perc = f"{percent:.2f}%"
+    cur = hrb(current)
+    tot = hrb(total)
+    rem_sec = int((total - current) / speed) if speed > 0 else 0
+    eta = hrt(rem_sec) if rem_sec > 0 else "00s"
+
+    bar = make_progress_bar(percent)
     clean_name = str(name)[:45]
+
+    from vars import BOT_USERNAME
+    bot_credit = f"@{BOT_USERNAME}" if BOT_USERNAME else "@course_wallah_official_bot"
 
     part_match = re.search(r"\(Part\s+(\d+)\)", clean_name, re.IGNORECASE)
     if part_match:
-        hdr = f"📤 <b>UPLOADING PART {part_match.group(1)} {dots}</b>"
-        sub_text = f"Uploading Part {part_match.group(1)}..."
+        hdr = f"📤 𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜 𝙋𝙖𝙧𝙩 {part_match.group(1)} 📤"
     else:
-        hdr = f"📤 <b>UPLOADING VIDEO {dots}</b>"
-        sub_text = "Uploading to Telegram..."
+        hdr = "📤 𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜 📤"
 
-    bar = make_progress_bar(percent)
     msg = (
-        "╭────────────────────────────╮\n"
-        "│       🎓 <b>COURSE WALLAH</b>     │\n"
-        "│                            │\n"
-        f"│    {hdr}    │\n"
-        "│                            │\n"
-        f"│ 🎬 <b>{clean_name}</b>\n"
-        f"│ <code>{bar}</code> <b>{percent:5.1f}%</b>\n"
-        "│                            │\n"
-        f"│        {bullets}           │\n"
-        f"│   <i>{sub_text}</i>   │\n"
-        "╰────────────────────────────╯"
+        f"**╭──⌈ {hdr} ⌋──╮**\n"
+        f"**┣⪼ [ {bar} ]**\n"
+        f"**┣⪼ 🚀 𝙎𝙥𝙚𝙚𝙙 :** {sp}\n"
+        f"**┣⪼ 📈 𝙋𝙧𝙤𝙜𝙧𝙚𝙨𝙨 :** {perc}\n"
+        f"**┣⪼ ⏳ 𝙇𝙤𝙖𝙙𝙚𝙙 :** {cur}\n"
+        f"**┣⪼ 🍁 𝙎𝙞𝙯𝙚 :** {tot}\n"
+        f"**┣⪼ 🕛 𝙀𝙏𝘼 :** {eta}\n"
+        f"**╰────⌈ ✪ {bot_credit} ✪ ⌋────╯**"
     )
 
     try:

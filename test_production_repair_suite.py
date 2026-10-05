@@ -311,8 +311,8 @@ class TestProductionRepairSuite(unittest.IsolatedAsyncioTestCase):
         await progress_bar(500 * 1024 * 1024, 1000 * 1024 * 1024, reply_mock, time.time() - 10, name="Lecture 01")
         self.assertTrue(reply_mock.edit_text.called)
         call_text = reply_mock.edit_text.call_args[0][0]
-        self.assertIn("UPLOADING", call_text)
-        self.assertIn("50.0%", call_text)
+        self.assertIn("𝙐𝙥𝙡𝙤𝙖𝙙𝙞𝙣𝙜", call_text)
+        self.assertIn("50.00%", call_text)
 
     # 20. Cleanup ONLY After Successful Upload
     @patch("itsgolu.duration", return_value=60.0)
