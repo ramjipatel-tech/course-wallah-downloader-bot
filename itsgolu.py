@@ -2261,11 +2261,24 @@ def download_raw_file(url: str, filename: str, user_id: int = None, custom_dir: 
         return None
 
 
+# ==============================================================================
+# 🔐 DRM DECRYPTION & MERGING (WIDEVINE / DASH MPD)
+# ==============================================================================
 def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, quality="720"):
+    """
+    Downloads and decrypts DRM-protected DASH (.mpd) video and audio streams using mp4decrypt (Bento4).
+    
+    Workflow:
+    1. Downloads encrypted raw video (.mp4) and audio (.m4a) streams via yt-dlp + aria2c.
+    2. Runs `mp4decrypt --key <KID:KEY>` on video and audio tracks separately.
+    3. Merges decrypted video and audio into a clean .mp4 container using FFmpeg without re-encoding (-c copy).
+    4. Automatically cleans up intermediate encrypted/decrypted segment files.
+    """
     try:
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
 
+        # Step 1: Download raw encrypted tracks using yt-dlp with unplayable format flag allowed
         cmd1 = list(get_ytdlp_cmd()) + [
             "-f", f"bv[height<={quality}]+ba/b",
             "-o", str(output_path / "file.%(ext)s"),
@@ -2282,6 +2295,7 @@ def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, qual
         audio_decrypted = False
         key_args = keys_string.split() if isinstance(keys_string, str) and keys_string.strip() else []
 
+        # Step 2: Decrypt video and audio files using Bento4's mp4decrypt
         for data in av_dir:
             if data.suffix == ".mp4" and not video_decrypted:
                 cmd2 = ["mp4decrypt"] + key_args + ["--show-progress", str(data), str(output_path / "video.mp4")]
@@ -2300,6 +2314,7 @@ def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, qual
         if not video_decrypted or not audio_decrypted:
             raise FileNotFoundError("Decryption failed: video or audio file not found.")
 
+        # Step 3: Lossless remuxing of decrypted video + audio using FFmpeg
         cmd4 = [
             "ffmpeg", "-y",
             "-i", str(output_path / "video.mp4"),
@@ -2309,6 +2324,7 @@ def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, qual
         ]
         subprocess.run(cmd4, check=True)
 
+        # Step 4: Cleanup temporary track files
         if (output_path / "video.mp4").exists():
             (output_path / "video.mp4").unlink(missing_ok=True)
         if (output_path / "audio.m4a").exists():
@@ -2635,7 +2651,19 @@ async def download_video(url: str, output_name: str, quality: str = "480p", user
     return None
 
 
+# ==============================================================================
+# 🔓 IN-PLACE HEADER XOR DECRYPTION (CLASSPLUS / APPX ENCRYPTED FILES)
+# ==============================================================================
 def decrypt_file(file_path: str, key: str) -> bool:
+    """
+    Performs fast in-place XOR decryption on obfuscated/masked file headers (e.g., Appx/Classplus).
+    
+    How it works:
+    - Educational providers often obfuscate only the first 28 bytes (magic bytes / container header)
+      using an XOR bitmask key so standard players cannot detect the video container.
+    - Uses memory mapping (`mmap`) for instant zero-copy in-place bitwise XOR unmasking.
+    - Restores the original MKV/MP4 container header without rewriting the entire file.
+    """
     if not file_path or not os.path.exists(file_path):
         return False
 
@@ -2648,6 +2676,7 @@ def decrypt_file(file_path: str, key: str) -> bool:
         return True
 
     key_bytes = key.encode()
+    # Only the first 28 bytes are XOR-masked by the provider
     size = min(28, os.path.getsize(file_path))
 
     with open(file_path, "r+b") as f:
@@ -2657,7 +2686,9 @@ def decrypt_file(file_path: str, key: str) -> bool:
 
     return True
 
+
 def is_playable(file_path: str) -> bool:
+    """Verifies whether a media file has valid container and playable streams using ffprobe."""
     if not file_path or not os.path.exists(file_path):
         return False
     try:
@@ -2673,6 +2704,7 @@ def is_playable(file_path: str) -> bool:
 
 
 def repair_video(file_path: str) -> str:
+    """Repairs corrupt or unindexed container streams by stream-copying (-c copy) with FFmpeg."""
     if not file_path or not os.path.exists(file_path):
         return file_path
     repaired_path = file_path.replace(".mkv", "_fixed.mp4")
@@ -2697,7 +2729,10 @@ credit1 = os.environ.get(
 
 
 def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
-    # Download and decrypt the video
+    """
+    Downloads raw encrypted media, applies XOR header decryption, validates playability,
+    and performs FFmpeg container repair if needed.
+    """
     if "fetch_video" in url:
         final_url, meta, err = resolve_fetch_video_url(url, "720p")
         if final_url:
@@ -2717,14 +2752,14 @@ def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | No
 
     try:
         if key:
-            # Decrypt the file if key is provided
+            # Decrypt the file header if key is provided
             decrypt_file(video_path, key)
     except Exception as e:
         print(f"⚠️ Decrypt failed: {e}")
         return None
 
     if not is_playable(video_path):
-        # If not playable, repair the video
+        # If not playable, repair the container with FFmpeg
         return repair_video(video_path)
     else:
         # If already playable, return the original path
