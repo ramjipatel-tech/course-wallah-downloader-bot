@@ -514,13 +514,11 @@ async def start_cmd(client: Client, message: Message):
     anim_msg = None
     try:
         anim_frames = [
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩░░░░░░░░░░</code> <b>10%</b>",
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩🟩🟩░░░░░░</code> <b>25%</b>",
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩🟩🟩🟩🟩░░</code> <b>40%</b>",
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩🟩🟩🟩🟩🟩🟩░░</code> <b>60%</b>",
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩</code> <b>80%</b>",
-            "🚀 <b>INITIALIZING...</b>\n\n<code>🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩</code> <b>100%</b>",
-            "✨ <b>READY</b>"
+            "🌟 <b>Welcome Boss!</b> 🌟\n\n<b>Initializing Downloader bot...</b> 🤖\n\n<code>[⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️]</code> <b>0%</b>",
+            "🌟 <b>Welcome Boss!</b> 🌟\n\n<b>Loading modules & engines...</b> ⏳\n\n<code>[🟥🟥🟥⬜️⬜️⬜️⬜️⬜️⬜️⬜️]</code> <b>25%</b>",
+            "🌟 <b>Welcome Boss!</b> 🌟\n\n<b>Checking subscription & permissions...</b> 🔍\n\n<code>[🟧🟧🟧🟧🟧⬜️⬜️⬜️⬜️⬜️]</code> <b>50%</b>",
+            "🌟 <b>Welcome Boss!</b> 🌟\n\n<b>Preparing high-speed downloader...</b> ⚡\n\n<code>[🟨🟨🟨🟨🟨🟨🟨🟨⬜️⬜️]</code> <b>75%</b>",
+            "🌟 <b>Welcome Boss!</b> 🌟\n\n<b>Ready! Launching dashboard...</b> ✨\n\n<code>[🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩]</code> <b>100%</b>"
         ]
         anim_msg = await message.reply_text(anim_frames[0])
         for frame in anim_frames[1:]:
@@ -621,8 +619,41 @@ async def id_cmd(client: Client, message: Message):
         logger.warning(f"Failed to reply to /id command: {exc}")
 
 
+async def my_info_cmd(client: Client, message: Message):
+    """Provides the user with their Telegram information and subscription status."""
+    if not message or not message.from_user:
+        return
+    user = message.from_user
+    user_id = user.id
+    bot_uname = get_bot_username(client)
+    is_auth = db.is_user_authorized(user_id, bot_uname)
+    is_adm = db.is_admin(user_id)
+    u_info = db.get_user(user_id, bot_uname) or {}
+
+    status_str = "👑 <b>Admin / Owner</b>" if is_adm else ("⭐ <b>Premium Member</b>" if is_auth else "🆓 <b>Free / Unauthorized</b>")
+    expiry = u_info.get("expiry_date", "Lifetime" if is_adm else ("Active" if is_auth else "None"))
+
+    first_name = user.first_name or ""
+    last_name = user.last_name or ""
+    full_name = f"{first_name} {last_name}".strip() or "User"
+    username = f"@{user.username}" if user.username else "None"
+
+    text = (
+        "╭─────────────────────╮\n"
+        "│ ✨ <b>Your Telegram Info</b> ✨\n"
+        "├─────────────────────\n"
+        f"├ 👤 <b>Name:</b> <code>{full_name}</code>\n"
+        f"├ 🆔 <b>Username:</b> {username}\n"
+        f"├ 🔢 <b>TG ID:</b> <code>{user_id}</code>\n"
+        f"├ 🎖️ <b>Status:</b> {status_str}\n"
+        f"├ ⏳ <b>Plan Expiry:</b> <code>{expiry}</code>\n"
+        "╰─────────────────────╯"
+    )
+    await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
+
+
 # ==============================================================================
-# 🍪 PER-USER YOUTUBE COOKIES: /cookies, /getcookies, /deletecookies
+# 🍪 PER-USER YOUTUBE & INSTAGRAM COOKIES: /cookies, /ytcookies, /igcookies
 # ==============================================================================
 
 async def cookies_upload_cmd(client: Client, message: Message):
@@ -667,6 +698,30 @@ async def cookies_upload_cmd(client: Client, message: Message):
         await message.reply_text("⏱ Timed out waiting for cookie file. Send /cookies again when ready.")
     except Exception as e:
         await message.reply_text(f"❌ Error setting cookies: {str(e)}")
+
+
+async def igcookies_upload_cmd(client: Client, message: Message):
+    user_id = message.from_user.id
+    prompt = await message.reply_text(
+        "📂 <b>Instagram Cookies Configuration</b>\n\n"
+        "<blockquote>Please upload your Instagram cookies file in <code>.txt</code> format within 60 seconds.</blockquote>",
+        quote=True
+    )
+    try:
+        doc_msg: Message = await client.listen(chat_id=message.chat.id, user_id=user_id, timeout=60)
+        if not doc_msg.document or not doc_msg.document.file_name.endswith(".txt"):
+            await message.reply_text("❌ Invalid file format! Please upload a valid <code>.txt</code> file.")
+            return
+
+        ig_path = os.getenv("INSTAGRAM_COOKIES_PATH", "instagram_cookies.txt")
+        await doc_msg.download(file_name=ig_path)
+        await message.reply_text(
+            f"✅ <b>Instagram cookies updated successfully!</b>\n📂 Saved to: <code>{ig_path}</code>"
+        )
+    except asyncio.TimeoutError:
+        await prompt.edit_text("⏱ Timed out waiting for Instagram cookies file. Send /igcookies again when ready.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error setting Instagram cookies: {str(e)}")
 
 
 async def getcookies_cmd(client: Client, message: Message):
@@ -4776,13 +4831,15 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, MessageHandler(help_cmd, filters.command("help") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(id_cmd, filters.command("id")))
     add_handler_to_client(client, EditedMessageHandler(id_cmd, filters.command("id")))
+    add_handler_to_client(client, MessageHandler(my_info_cmd, filters.command(["info", "myinfo", "me"]) & filters.private))
     add_handler_to_client(client, MessageHandler(drm_cmd, filters.command("drm") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_status_cmd, filters.command("status") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_stop_cmd, filters.command(["stop", "pause"]) & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_resume_cmd, filters.command(["resume", "retry"]) & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(job_cancel_cmd, filters.command("cancel") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(list_user_jobs_cmd, filters.command(["jobs", "myjobs"]) & filters.private & auth_filter))
-    add_handler_to_client(client, MessageHandler(cookies_upload_cmd, filters.command("cookies") & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(cookies_upload_cmd, filters.command(["cookies", "ytcookies"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(igcookies_upload_cmd, filters.command("igcookies") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(getcookies_cmd, filters.command("getcookies") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(deletecookies_cmd, filters.command("deletecookies") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(text_to_txt_cmd, filters.command(["t2t", "txt"]) & filters.private & auth_filter))
@@ -4817,9 +4874,9 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, MessageHandler(restart_cmd, filters.command("restart") & filters.private))
 
     # Auth Commands
-    add_handler_to_client(client, MessageHandler(auth.add_user_cmd, filters.command("add") & filters.private))
+    add_handler_to_client(client, MessageHandler(auth.add_user_cmd, filters.command(["add", "addauth"]) & filters.private))
     add_handler_to_client(client, MessageHandler(auth.renew_user_cmd, filters.command("renew") & filters.private))
-    add_handler_to_client(client, MessageHandler(auth.remove_user_cmd, filters.command("remove") & filters.private))
+    add_handler_to_client(client, MessageHandler(auth.remove_user_cmd, filters.command(["remove", "rmauth", "deleteuser"]) & filters.private))
     add_handler_to_client(client, MessageHandler(auth.ban_user_cmd, filters.command("ban") & filters.private))
     add_handler_to_client(client, MessageHandler(auth.unban_user_cmd, filters.command("unban") & filters.private))
     add_handler_to_client(client, MessageHandler(auth.list_users_cmd, filters.command("users") & filters.private))
