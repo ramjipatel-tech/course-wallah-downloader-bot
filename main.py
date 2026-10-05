@@ -13,6 +13,7 @@ import subprocess
 import asyncio
 import logging
 import sqlite3
+import base64
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from urllib.parse import unquote, urlparse
@@ -35,6 +36,8 @@ import aiohttp
 import aiofiles
 import requests
 import yt_dlp
+from yt_dlp import YoutubeDL
+from bs4 import BeautifulSoup
 import tgcrypto
 from pyrogram import Client, filters, idle, enums
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler, EditedMessageHandler
@@ -897,6 +900,388 @@ async def text_to_txt_cmd(client: Client, message: Message):
 
 async def t2h_cmd(client: Client, message: Message):
     await html_handler(client, message)
+
+
+async def html_to_txt_cmd(client: Client, message: Message):
+    """Converts uploaded HTML file into a .txt file formatted for /drm downloader."""
+    editable = await message.reply_text("<b>📄 HTML to TXT Converter</b>\n\n<blockquote>Please upload your <code>.html</code> file:</blockquote>")
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        if not input_msg.document or not input_msg.document.file_name.endswith(".html"):
+            await message.reply_text("❌ Invalid file. Please upload an <code>.html</code> file.")
+            return
+
+        html_file = await input_msg.download()
+        await input_msg.delete()
+        await editable.delete()
+
+        with open(html_file, "r", encoding="utf-8", errors="ignore") as f:
+            soup = BeautifulSoup(f, "html.parser")
+
+        videos = []
+        tables = soup.find_all("table")
+        for table in tables:
+            rows = table.find_all("tr")
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) >= 2 and cols[1].find("a"):
+                    name = cols[0].get_text().strip()
+                    link = cols[1].find("a")["href"]
+                    videos.append(f"{name}:{link}")
+
+        if not videos:
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                text = a_tag.get_text().strip()
+                if text and href and ("http://" in href or "https://" in href):
+                    videos.append(f"{text}:{href}")
+
+        if not videos:
+            await message.reply_text("❌ No valid links found in the uploaded HTML file.")
+            try:
+                os.remove(html_file)
+            except Exception:
+                pass
+            return
+
+        os.makedirs("downloads", exist_ok=True)
+        txt_file = os.path.splitext(html_file)[0] + ".txt"
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(videos))
+
+        await message.reply_document(
+            document=txt_file,
+            caption=f"✅ <b>HTML to TXT Converted!</b>\n\n<blockquote>🔗 Found <b>{len(videos)}</b> links.\nReady for /drm!</blockquote>"
+        )
+        try:
+            os.remove(html_file)
+            os.remove(txt_file)
+        except Exception:
+            pass
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for HTML file. Send /h2t again when ready.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error during conversion: {str(e)}")
+
+
+async def remtitle_cmd(client: Client, message: Message):
+    """Removes parenthesis and brackets from names in a TXT file."""
+    editable = await message.reply_text("<b>🧹 Clean Parentheses/Brackets from TXT</b>\n\n<blockquote>Please upload your <code>.txt</code> file:</blockquote>")
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        if not input_msg.document or not input_msg.document.file_name.endswith(".txt"):
+            await message.reply_text("❌ Invalid file. Please upload a <code>.txt</code> file.")
+            return
+
+        txt_file = await input_msg.download()
+        await input_msg.delete()
+        await editable.delete()
+
+        with open(txt_file, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        cleaned_lines = []
+        for line in lines:
+            if ":" in line:
+                name, url = line.split(":", 1)
+                clean_name = name.replace("(", "").replace(")", "").replace("[", "").replace("]", "").strip()
+                cleaned_lines.append(f"{clean_name}:{url.strip()}")
+            else:
+                cleaned_lines.append(line.replace("(", "").replace(")", "").replace("[", "").replace("]", ""))
+
+        out_file = os.path.splitext(txt_file)[0] + "_cleaned.txt"
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(cleaned_lines))
+
+        await message.reply_document(
+            document=out_file,
+            caption="✅ <b>Cleaned TXT File Generated!</b>\n\n<blockquote>All brackets and parentheses removed.</blockquote>"
+        )
+        try:
+            os.remove(txt_file)
+            os.remove(out_file)
+        except Exception:
+            pass
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for TXT file. Send /remtitle again when ready.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def studyiq_editor_cmd(client: Client, message: Message):
+    """Processes StudyIQ and MPD URLs in a TXT file."""
+    editable = await message.reply_text("<b>🎓 StudyIQ & MPD URL Processor</b>\n\n<blockquote>Please upload your <code>.txt</code> file:</blockquote>")
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        if not input_msg.document or not input_msg.document.file_name.endswith(".txt"):
+            await message.reply_text("❌ Invalid file. Please upload a <code>.txt</code> file.")
+            return
+
+        txt_file = await input_msg.download()
+        await input_msg.delete()
+        await editable.delete()
+
+        with open(txt_file, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        processed_lines = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if "m3u8" in line:
+                processed_lines.append(line)
+            elif "mpd" in line:
+                processed_lines.append(re.sub(r"\*.*", "", line))
+            else:
+                processed_lines.append(line)
+
+        out_file = os.path.splitext(txt_file)[0] + "_processed.txt"
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(processed_lines))
+
+        await message.reply_document(
+            document=out_file,
+            caption="✅ <b>Processed StudyIQ TXT Generated!</b>"
+        )
+        try:
+            os.remove(txt_file)
+            os.remove(out_file)
+        except Exception:
+            pass
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for TXT file.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def fetchdetails_cmd(client: Client, message: Message):
+    """Inspects Classplus Organization details and lists courses to encode batch token."""
+    editable = await message.reply_text(
+        "<b>🏫 Classplus Organization Inspector</b>\n\n"
+        "<blockquote>Please send your 4-6 character <b>Org Code</b> (e.g. <code>abcd</code>):</blockquote>"
+    )
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        org_code = input_msg.text.strip()
+        await input_msg.delete()
+
+        def _fetch_org(code):
+            headers = {
+                "accept-encoding": "gzip",
+                "api-version": "35",
+                "app-version": "1.4.73.2",
+                "content-type": "application/json",
+                "user-agent": "Mobile-Android",
+            }
+            res = requests.get(f"https://api.classplusapp.com/v2/orgs/{code}", headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("data", {})
+                return data.get("orgName", "Unknown"), data.get("orgId")
+            return None, None
+
+        org_name, org_id = await asyncio.to_thread(_fetch_org, org_code)
+        if not org_id:
+            await editable.edit_text("❌ Failed to fetch organization. Please verify your Org Code and try again.")
+            return
+
+        await editable.edit_text(
+            f"🏢 <b>Organization Found:</b>\n"
+            f"• <b>Name:</b> <code>{org_name}</code>\n"
+            f"• <b>Org ID:</b> <code>{org_id}</code>\n\n"
+            "⏳ <i>Fetching courses list...</i>"
+        )
+
+        def _fetch_courses(oid):
+            decoded_val = f'{{"tutorId":null,"orgId":"{oid}","categoryId":null}}'
+            encoded_val = base64.b64encode(decoded_val.encode("utf-8")).decode("utf-8")
+            url = f"https://api.classplusapp.com/v2/course/preview/similar/{encoded_val}"
+            headers = {"accept": "application/json", "Api-Version": "22", "User-Agent": "Mobile-Android"}
+            params = {"filterId": "1", "sortId": "7", "limit": "50", "offset": "0"}
+            res = requests.get(url, params=params, headers=headers, timeout=10)
+            if res.status_code == 200:
+                return res.json().get("data", {}).get("coursesData", [])
+            return []
+
+        courses = await asyncio.to_thread(_fetch_courses, org_id)
+        if not courses:
+            await editable.edit_text(f"🏢 <b>Org:</b> {org_name} (ID: <code>{org_id}</code>)\n\n❌ No public courses found.")
+            return
+
+        lines = [f"📚 <b>Courses in {org_name}</b> (Total: {len(courses)}):\n"]
+        for idx, c in enumerate(courses[:30], 1):
+            c_name = c.get("name", "Unnamed")
+            b_id = c.get("id", "N/A")
+            lines.append(f"{idx}. <b>{c_name}</b> — <code>{b_id}</code>")
+
+        courses_text = "\n".join(lines)
+        if len(courses_text) > 3800:
+            courses_text = courses_text[:3800] + "\n..."
+
+        await editable.edit_text(
+            f"{courses_text}\n\n"
+            "<blockquote>Send any <b>Batch ID</b> from above to encode it into a download token:</blockquote>"
+        )
+
+        batch_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        batch_id = batch_msg.text.strip()
+        await batch_msg.delete()
+
+        payload = {"batchId": batch_id, "orgId": str(org_id)}
+        token_enc = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+
+        await message.reply_text(
+            f"🎯 <b>Classplus Batch Token Generated!</b>\n\n"
+            f"• <b>Org:</b> {org_name} (<code>{org_id}</code>)\n"
+            f"• <b>Batch ID:</b> <code>{batch_id}</code>\n\n"
+            f"🔑 <b>Encoded Token:</b>\n<code>{token_enc}</code>"
+        )
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for input.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def youtube_extract_cmd(client: Client, message: Message):
+    """Extracts all videos from a YouTube playlist or channel into a .txt file."""
+    editable = await message.reply_text(
+        "<b>🎥 YouTube Playlist / Channel Extractor</b>\n\n"
+        "<blockquote>Please send the YouTube Playlist or Channel URL:</blockquote>"
+    )
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        yt_url = input_msg.text.strip()
+        await input_msg.delete()
+        await editable.edit_text("⏳ <i>Extracting video links with yt-dlp...</i>")
+
+        def _extract_yt(url):
+            ydl_opts = {
+                "quiet": True,
+                "extract_flat": True,
+                "skip_download": True,
+                "no_warnings": True,
+            }
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    return None, []
+                title = info.get("title", "YouTube_Playlist")
+                entries = info.get("entries", [])
+                links = []
+                for idx, entry in enumerate(entries, 1):
+                    if not entry:
+                        continue
+                    v_title = entry.get("title", f"Video_{idx}")
+                    v_url = entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+                    if not v_url.startswith("http"):
+                        v_url = f"https://www.youtube.com/watch?v={v_url}"
+                    clean_title = helper.safe_filename(v_title)
+                    links.append(f"{clean_title}:{v_url}")
+                return title, links
+
+        pl_title, links = await asyncio.to_thread(_extract_yt, yt_url)
+        if not links:
+            await editable.edit_text("❌ No videos found in the provided YouTube URL.")
+            return
+
+        safe_title = helper.safe_filename(pl_title or "YouTube_Playlist")
+        os.makedirs("downloads", exist_ok=True)
+        txt_path = f"downloads/{safe_title}.txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(links))
+
+        await message.reply_document(
+            document=txt_path,
+            caption=f"✅ <b>YouTube Playlist Extracted!</b>\n\n<blockquote>📚 Title: <b>{pl_title}</b>\n🔗 Total Videos: <b>{len(links)}</b>\n\nReady for /drm!</blockquote>"
+        )
+        try:
+            os.remove(txt_path)
+        except Exception:
+            pass
+        await editable.delete()
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for YouTube URL.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+
+async def khan_extract_cmd(client: Client, message: Message):
+    """Khan Sir / PenPencil Batch Extractor."""
+    editable = await message.reply_text(
+        "<b>🎓 Khan Sir / PenPencil Extractor</b>\n\n"
+        "<blockquote>Send your credentials in this format:\n<code>Mobile*Password</code></blockquote>"
+    )
+    try:
+        input_msg: Message = await client.listen(chat_id=message.chat.id, user_id=message.from_user.id, timeout=120)
+        raw_auth = input_msg.text.strip()
+        await input_msg.delete()
+
+        if "*" not in raw_auth:
+            await editable.edit_text("❌ Invalid format! Please send as <code>Mobile*Password</code>.")
+            return
+
+        username, password = raw_auth.split("*", 1)
+        await editable.edit_text("⏳ <i>Authenticating with Khan Sir API...</i>")
+
+        def _khan_flow(u, p):
+            rwa_url = "https://api.penpencil.xyz/v1/oauth/token"
+            headers = {
+                "Host": "api.penpencil.xyz",
+                "authorization": "Bearer c5c5e9c5721a1c4e322250fb31825b62f9715a4572318de90cfc93b02a8a8a75",
+                "client-id": "5f439b64d553cc02d283e1b4",
+                "client-version": "21.0",
+                "user-agent": "Android",
+                "client-type": "MOBILE",
+                "content-type": "application/json; charset=UTF-8",
+            }
+            info = {
+                "username": u.strip(),
+                "password": p.strip(),
+                "organizationId": "5f439b64d553cc02d283e1b4",
+                "client_id": "system-admin",
+                "client_secret": "KjPXuAVfC5xbmgreETNMaL7z",
+                "grant_type": "password",
+            }
+            s = requests.Session()
+            res = s.post(url=rwa_url, headers=headers, json=info, timeout=12)
+            if res.status_code != 200:
+                return False, f"Login failed ({res.status_code})", []
+
+            token = res.json().get("data", {}).get("access_token")
+            auth_headers = dict(headers)
+            auth_headers["authorization"] = f"Bearer {token}"
+
+            params = {
+                "mode": "1",
+                "batchCategoryIds": "619bedc3394f824a71d8e721",
+                "organisationId": "5f439b64d553cc02d283e1b4",
+                "page": "1",
+            }
+            batches_res = s.get("https://api.penpencil.xyz/v3/batches/my-batches", params=params, headers=auth_headers, timeout=12)
+            if batches_res.status_code == 200:
+                return True, token, batches_res.json().get("data", [])
+            return True, token, []
+
+        success, token_or_err, batches = await asyncio.to_thread(_khan_flow, username, password)
+        if not success:
+            await editable.edit_text(f"❌ {token_or_err}")
+            return
+
+        if not batches:
+            await editable.edit_text(f"✅ Login Successful!\n🔑 Token: <code>{token_or_err}</code>\n\nℹ️ No enrolled batches found in account.")
+            return
+
+        lines = [f"✅ <b>Login Successful!</b>\n📚 <b>Your Batches:</b>\n"]
+        for b in batches[:20]:
+            b_id = b.get("_id", "N/A")
+            b_name = b.get("name", "Unnamed")
+            lines.append(f"• <code>{b_id}</code> — <b>{b_name}</b>")
+
+        await editable.edit_text("\n".join(lines))
+    except asyncio.TimeoutError:
+        await editable.edit_text("⏱ Timed out waiting for credentials.")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
 
 
 # ==============================================================================
@@ -4844,6 +5229,12 @@ def register_all_handlers(client: Client):
     add_handler_to_client(client, MessageHandler(deletecookies_cmd, filters.command("deletecookies") & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(text_to_txt_cmd, filters.command(["t2t", "txt"]) & filters.private & auth_filter))
     add_handler_to_client(client, MessageHandler(t2h_cmd, filters.command("t2h") & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(html_to_txt_cmd, filters.command(["h2t", "html2txt"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(remtitle_cmd, filters.command(["remtitle", "cleantxt"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(studyiq_editor_cmd, filters.command(["studyiqeditor", "studyiq"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(fetchdetails_cmd, filters.command(["fetchdetails", "fetchcourses"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(youtube_extract_cmd, filters.command(["youtube", "ytextract"]) & filters.private & auth_filter))
+    add_handler_to_client(client, MessageHandler(khan_extract_cmd, filters.command(["khan", "khansir"]) & filters.private & auth_filter))
 
     # Admin Commands
     add_handler_to_client(client, MessageHandler(admin_panel_cmd, filters.command("admin") & filters.private & admin_filter))
@@ -4979,6 +5370,12 @@ async def setup_bot_commands(client: Client):
             BotCommand("plan", "Check your subscription plan"),
             BotCommand("t2t", "Convert text to .txt file"),
             BotCommand("t2h", "Web HTML converter"),
+            BotCommand("h2t", "Convert HTML to .txt file"),
+            BotCommand("remtitle", "Clean brackets/titles in TXT"),
+            BotCommand("studyiqeditor", "Clean StudyIQ MPD links"),
+            BotCommand("fetchdetails", "Fetch Classplus courses"),
+            BotCommand("youtube", "Extract YouTube playlist/channel"),
+            BotCommand("khan", "Extract Khan Sir batch links"),
             BotCommand("id", "Get your Telegram & Chat ID"),
             BotCommand("help", "View user manual")
         ]
